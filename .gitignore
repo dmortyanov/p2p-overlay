@@ -1,0 +1,50 @@
+# Build
+build/
+cmake-build-*/
+out/
+
+# vcpkg
+vcpkg_installed/
+
+# IDE
+.vs/
+.vscode/settings.json
+.idea/
+*.suo
+*.user
+*.sln.docstates
+CMakeSettings.json
+CMakeUserPresets.json
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node state (generated at runtime)
+node_state/
+
+# Experiment results (keep .gitkeep, ignore bulk data)
+results/*.csv
+results/*.json
+!results/.gitkeep
+pcap/*.pcap
+!pcap/.gitkeep
+
+# Keys (NEVER commit private keys)
+*.key
+*.pem
+!tests/fixtures/*.pem

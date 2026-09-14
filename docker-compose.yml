@@ -1,0 +1,53 @@
+# docker-compose.yml — Basic 2-node test configuration
+# For Stage 1: verify that two nodes can exchange frames
+
+services:
+  node1:
+    build: .
+    container_name: p2p-node1
+    command:
+      - "--config"
+      - "/etc/p2p/default.toml"
+      - "--port"
+      - "9000"
+      - "--data-dir"
+      - "/data/node1"
+      - "--log-level"
+      - "debug"
+    volumes:
+      - node1_data:/data/node1
+      - ./results:/results
+    networks:
+      - p2p_net
+    ports:
+      - "9001:9000"
+
+  node2:
+    build: .
+    container_name: p2p-node2
+    command:
+      - "--config"
+      - "/etc/p2p/default.toml"
+      - "--port"
+      - "9000"
+      - "--data-dir"
+      - "/data/node2"
+      - "--bootstrap"
+      - "p2p-node1:9000"
+      - "--log-level"
+      - "debug"
+    volumes:
+      - node2_data:/data/node2
+      - ./results:/results
+    networks:
+      - p2p_net
+    depends_on:
+      - node1
+
+volumes:
+  node1_data:
+  node2_data:
+
+networks:
+  p2p_net:
+    driver: bridge

@@ -1,0 +1,13 @@
+{
+  "name": "p2p-overlay",
+  "version": "0.1.0",
+  "description": "Secure decentralized P2P overlay network with Kademlia DHT",
+  "dependencies": [
+    "asio",
+    "libsodium",
+    "nlohmann-json",
+    "tomlplusplus",
+    "spdlog",
+    "catch2"
+  ]
+}

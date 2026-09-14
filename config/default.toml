@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────
+# P2P Overlay Node — Default Configuration
+# All tunables are exposed here; no source code changes needed.
+# ─────────────────────────────────────────────────────────────
+
+[node]
+# listen_address: IP + port for TCP listener
+listen_address = "0.0.0.0"
+listen_port    = 9000
+
+# data_dir: per-node persistent state (keys, DHT store)
+data_dir = "./node_state"
+
+[identity]
+# Key algorithm for long-term identity
+algorithm = "ed25519"
+
+[dht]
+# Number of bits in NodeID (SHA-256 → 256)
+node_id_bits   = 256
+
+# Maximum contacts per k-bucket
+k_bucket_size  = 4
+
+# Parallel lookups per iteration
+alpha           = 3
+
+# Replication factor for STORE
+replication     = 3
+
+# Record TTL in seconds (120–300)
+record_ttl_sec  = 180
+
+# Republish interval (must be ≤ TTL/2)
+republish_interval_sec = 80
+
+# Refresh interval for stale buckets (seconds)
+refresh_interval_sec = 60
+
+# Maximum record payload size (bytes)
+max_record_size = 4096
+
+[transport]
+# Frame protocol version
+protocol_version = 1
+
+# Maximum payload size in a single frame (bytes)
+max_frame_payload = 65536
+
+# TCP connect timeout (ms)
+connect_timeout_ms = 5000
+
+# TCP read/write timeout (ms)
+io_timeout_ms = 10000
+
+# Keepalive / PING interval (ms)
+keepalive_interval_ms = 30000
+
+[tunnel]
+# Minimum relay hops (advanced: 3, simplified: 2)
+min_relay_hops = 3
+
+# Maximum relay hops
+max_relay_hops = 5
+
+# Tunnel TTL in seconds
+tunnel_ttl_sec = 300
+
+# Pool size (advanced: ≥3)
+pool_size = 3
+
+# Heartbeat interval (ms)
+heartbeat_interval_ms = 10000
+
+# Degradation threshold: consecutive failures
+max_consecutive_failures = 3
+
+[tunnel.profiling]
+# EMA smoothing factor for success rate
+ema_alpha_success = 0.3
+
+# EMA smoothing factor for latency
+ema_alpha_latency = 0.2
+
+[app]
+# Maximum message size (bytes)
+max_message_size = 65536
+
+# File transfer: max block size (bytes, ≤48 KiB)
+file_block_size = 49152
+
+# File transfer: max total file size (bytes, 100 MiB)
+max_file_size = 104857600
+
+# File transfer: incomplete file timeout (seconds)
+incomplete_file_timeout_sec = 120
+
+# Download directory
+download_dir = "./downloads"
+
+[logging]
+# Log level: trace, debug, info, warn, error, critical
+level = "info"
+
+# Log to file (empty = stdout only)
+file = ""
+
+[metrics]
+# Enable structured event logging
+enabled = true
+
+# Export format: csv, json
+export_format = "csv"
+
+# Export directory
+export_dir = "./results"
+
+[bootstrap]
+# Bootstrap scheme: star, ring, tree, multi-seed
+scheme = "star"
+
+# Bootstrap peer addresses (host:port)
+peers = []
