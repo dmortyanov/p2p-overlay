@@ -56,6 +56,16 @@ add_library(p2p_core STATIC
     src/config/config.hpp
     src/config/config.cpp
 
+    # DHT
+    src/dht/k_bucket.hpp
+    src/dht/k_bucket.cpp
+    src/dht/routing_table.hpp
+    src/dht/routing_table.cpp
+    src/dht/dht_messages.hpp
+    src/dht/dht_messages.cpp
+    src/dht/lookup_engine.hpp
+    src/dht/lookup_engine.cpp
+
     # Node
     src/node.hpp
     src/node.cpp
@@ -97,4 +107,16 @@ if(BUILD_TESTS)
     add_executable(test_node_id tests/unit/test_node_id.cpp)
     target_link_libraries(test_node_id PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_node_id COMMAND test_node_id)
+
+    add_executable(test_k_bucket tests/unit/test_k_bucket.cpp)
+    target_link_libraries(test_k_bucket PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_k_bucket COMMAND test_k_bucket)
+
+    add_executable(test_routing_table tests/unit/test_routing_table.cpp)
+    target_link_libraries(test_routing_table PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_routing_table COMMAND test_routing_table)
+
+    add_executable(test_lookup tests/unit/test_lookup.cpp)
+    target_link_libraries(test_lookup PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_lookup COMMAND test_lookup)
 endif()

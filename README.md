@@ -13,9 +13,9 @@
 
 ## Документация проекта
 
-- [Архитектурная спецификация (docs/architecture.md)](file:///c:/school/4cource/seti/p2p-overlay/docs/architecture.md) — детальное описание 7 подсистем, алгоритмов поиска, 4 графов сети, AKE, луковичной маршрутизации и фасада API
-- [Спецификация протокола (docs/protocol_spec.md)](file:///c:/school/4cource/seti/p2p-overlay/docs/protocol_spec.md) — формат кадра, бинарные заголовки, типы сообщений и схемы CBOR
-- [Сравнение форматов сериализации (docs/serialization_comparison.md)](file:///c:/school/4cource/seti/p2p-overlay/docs/serialization_comparison.md) — обоснование выбора CBOR (RFC 8949) против MessagePack и JSON
+- [Архитектурная спецификация (docs/architecture.md)] — детальное описание 7 подсистем, алгоритмов поиска, 4 графов сети, AKE, луковичной маршрутизации и фасада API
+- [Спецификация протокола (docs/protocol_spec.md)] — формат кадра, бинарные заголовки, типы сообщений и схемы CBOR
+- [Сравнение форматов сериализации (docs/serialization_comparison.md)] — обоснование выбора CBOR (RFC 8949) против MessagePack и JSON
 
 ## Требования
 
@@ -95,7 +95,7 @@ orchestrator/                 # Python-оркестратор экспериме
 ## Текущий статус
 
 - [x] **Этап 1**: Transport + Frame + Identity
-- [ ] Этап 2: Kademlia DHT
+- [x] **Этап 2**: Kademlia DHT (K-Bucket LRU, RoutingTable 256 buckets, iterative lookup, FIND_NODE RPC)
 - [ ] Этап 3: STORE, FIND_VALUE, записи
 - [ ] Этап 4: AKE-протокол
 - [ ] Этап 5: Туннели

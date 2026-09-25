@@ -2,6 +2,7 @@
 /// @brief Top-level P2P node implementation.
 
 #include "node.hpp"
+#include "dht/dht_messages.hpp"
 
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -29,6 +30,10 @@ void Node::start() {
     auto data_dir = std::filesystem::path(config_.node.data_dir);
     keypair_ = std::make_unique<identity::Keypair>(
         identity::Keypair::load_or_generate(data_dir));
+
+    // Initialize Kademlia routing table
+    routing_table_ = std::make_unique<dht::RoutingTable>(
+        node_id(), config_.dht.k_bucket_size);
 
     spdlog::info("═══════════════════════════════════════════════");
     spdlog::info("  P2P Overlay Node starting");
@@ -198,6 +203,17 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                         NodeID::from_hex(j["node_id"].get<std::string>(), peer_id);
                         conn->set_peer_id(peer_id);
                         spdlog::info("PING from NodeID={}", peer_id.to_short_hex());
+
+                        // Update routing table
+                        auto endpoint = conn->remote_endpoint();
+                        PeerInfo peer{
+                            .node_id = peer_id,
+                            .address = PeerAddress{
+                                .host = endpoint.address().to_string(),
+                                .port = endpoint.port()
+                            }
+                        };
+                        routing_table_->add_or_update(peer);
                     }
                 } catch (const std::exception& e) {
                     spdlog::warn("Failed to parse PING payload: {}", e.what());
@@ -228,10 +244,59 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                         NodeID::from_hex(j["node_id"].get<std::string>(), peer_id);
                         conn->set_peer_id(peer_id);
                         spdlog::info("PONG from NodeID={}", peer_id.to_short_hex());
+
+                        // Update routing table
+                        auto endpoint = conn->remote_endpoint();
+                        PeerInfo peer{
+                            .node_id = peer_id,
+                            .address = PeerAddress{
+                                .host = endpoint.address().to_string(),
+                                .port = endpoint.port()
+                            }
+                        };
+                        routing_table_->add_or_update(peer);
                     }
                 } catch (const std::exception& e) {
                     spdlog::warn("Failed to parse PONG payload: {}", e.what());
                 }
+            }
+            break;
+        }
+
+        case MessageType::FIND_NODE_REQUEST: {
+            dht::FindNodeRequest req;
+            if (dht::deserialize_find_node_request(frame.payload, req)) {
+                spdlog::debug("FIND_NODE_REQUEST for target {} from {}",
+                              req.target.to_short_hex(),
+                              req.sender.node_id.to_short_hex());
+                routing_table_->add_or_update(req.sender);
+
+                auto closest = routing_table_->find_closest(req.target, config_.dht.k_bucket_size);
+
+                dht::FindNodeResponse resp{.closest_nodes = std::move(closest)};
+                auto cbor_payload = dht::serialize_find_node_response(resp);
+
+                Frame resp_frame(MessageType::FIND_NODE_RESPONSE, frame.request_id);
+                resp_frame.flags |= FrameFlags::IS_RESPONSE;
+                resp_frame.payload = std::move(cbor_payload);
+                conn->send(resp_frame);
+            } else {
+                spdlog::warn("Malformed FIND_NODE_REQUEST from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::FIND_NODE_RESPONSE: {
+            dht::FindNodeResponse resp;
+            if (dht::deserialize_find_node_response(frame.payload, resp)) {
+                spdlog::debug("FIND_NODE_RESPONSE from {} with {} contacts",
+                              conn->remote_endpoint_str(),
+                              resp.closest_nodes.size());
+                for (const auto& peer : resp.closest_nodes) {
+                    routing_table_->add_or_update(peer);
+                }
+            } else {
+                spdlog::warn("Malformed FIND_NODE_RESPONSE from {}", conn->remote_endpoint_str());
             }
             break;
         }
@@ -272,6 +337,35 @@ void Node::on_disconnect(transport::TcpConnection::Ptr conn,
     connections_.erase(
         std::remove(connections_.begin(), connections_.end(), conn),
         connections_.end());
+}
+
+std::vector<PeerInfo> Node::find_closest_nodes(const NodeID& target, std::size_t count) const {
+    if (!routing_table_) return {};
+    return routing_table_->find_closest(target, count);
+}
+
+void Node::send_find_node(transport::TcpConnection::Ptr conn, const NodeID& target) {
+    if (!conn) return;
+
+    dht::FindNodeRequest req{
+        .target = target,
+        .sender = PeerInfo{
+            .node_id = node_id(),
+            .address = PeerAddress{
+                .host = config_.node.listen_address,
+                .port = config_.node.listen_port
+            }
+        }
+    };
+
+    auto cbor_payload = dht::serialize_find_node_request(req);
+    auto rid = RequestID::generate();
+    transport::Frame frame(transport::MessageType::FIND_NODE_REQUEST, rid);
+    frame.payload = std::move(cbor_payload);
+    conn->send(frame);
+    spdlog::debug("Sent FIND_NODE_REQUEST to {} for target {}",
+                  conn->remote_endpoint_str(),
+                  target.to_short_hex());
 }
 
 } // namespace p2p

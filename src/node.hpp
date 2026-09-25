@@ -14,6 +14,7 @@
 ///   - Metrics
 
 #include "config/config.hpp"
+#include "dht/routing_table.hpp"
 #include "identity/keypair.hpp"
 #include "transport/tcp_connection.hpp"
 #include "transport/tcp_listener.hpp"
@@ -58,6 +59,17 @@ public:
     /// Get number of active connections.
     [[nodiscard]] std::size_t connection_count() const;
 
+    /// Access routing table.
+    [[nodiscard]] const dht::RoutingTable& routing_table() const { return *routing_table_; }
+    [[nodiscard]] dht::RoutingTable& routing_table() { return *routing_table_; }
+
+    /// Query closest nodes to target ID from local routing table.
+    [[nodiscard]] std::vector<PeerInfo> find_closest_nodes(const NodeID& target,
+                                                           std::size_t count = 4) const;
+
+    /// Send a FIND_NODE request to a specific connected peer.
+    void send_find_node(transport::TcpConnection::Ptr conn, const NodeID& target);
+
 private:
     /// Handle a new incoming connection.
     void on_accept(transport::TcpConnection::Ptr conn);
@@ -74,6 +86,7 @@ private:
     config::Config                 config_;
     asio::io_context               io_;
     std::unique_ptr<identity::Keypair> keypair_;
+    std::unique_ptr<dht::RoutingTable> routing_table_;
     transport::TcpListener::Ptr    listener_;
 
     // Active connections indexed by remote endpoint string
