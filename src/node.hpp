@@ -14,6 +14,7 @@
 ///   - Metrics
 
 #include "config/config.hpp"
+#include "dht/lookup_engine.hpp"
 #include "dht/routing_table.hpp"
 #include "identity/keypair.hpp"
 #include "transport/tcp_connection.hpp"
@@ -70,6 +71,15 @@ public:
     /// Send a FIND_NODE request to a specific connected peer.
     void send_find_node(transport::TcpConnection::Ptr conn, const NodeID& target);
 
+    /// Start an asynchronous iterative DHT lookup across the network for target NodeID.
+    /// Employs alpha=3 parallelism, auto-connects to newly discovered contacts,
+    /// and invokes callback when the lookup converges to the k closest nodes.
+    void async_lookup(const NodeID& target,
+                      std::function<void(const std::vector<PeerInfo>&, const dht::LookupMetrics&)> callback);
+
+    /// Export routing table state to JSON string (satisfies E2-8 and proof of non-degeneracy).
+    [[nodiscard]] std::string export_routing_table_json() const;
+
 private:
     /// Handle a new incoming connection.
     void on_accept(transport::TcpConnection::Ptr conn);
@@ -83,6 +93,9 @@ private:
     /// Register a connection and set up handlers.
     void register_connection(transport::TcpConnection::Ptr conn);
 
+    /// Find an active connection to the given NodeID.
+    transport::TcpConnection::Ptr get_connection_to(const NodeID& id);
+
     config::Config                 config_;
     asio::io_context               io_;
     std::unique_ptr<identity::Keypair> keypair_;
@@ -92,6 +105,10 @@ private:
     // Active connections indexed by remote endpoint string
     mutable std::mutex             conns_mutex_;
     std::vector<transport::TcpConnection::Ptr> connections_;
+
+    // In-flight RPC request handlers (for request_id correlation)
+    mutable std::mutex             pending_mutex_;
+    std::unordered_map<RequestID, std::function<void(const transport::Frame&)>> pending_requests_;
 };
 
 } // namespace p2p

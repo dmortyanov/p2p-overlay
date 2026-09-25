@@ -4,6 +4,7 @@
 #include "dht/routing_table.hpp"
 
 #include <algorithm>
+#include <nlohmann/json.hpp>
 
 namespace p2p::dht {
 
@@ -128,11 +129,40 @@ void RoutingTable::mark_failed(const NodeID& id) {
     buckets_[idx].mark_failed(id);
 }
 
-void RoutingTable::clear() {
+std::string RoutingTable::to_json() const {
     std::lock_guard lock(mutex_);
-    for (auto& bucket : buckets_) {
-        bucket.clear();
+    nlohmann::json root;
+    root["local_id"] = local_id_.to_hex();
+    root["k"] = k_;
+    root["total_contacts"] = 0;
+
+    nlohmann::json buckets_arr = nlohmann::json::array();
+    std::size_t total = 0;
+
+    for (std::size_t i = 0; i < NUM_BUCKETS; ++i) {
+        if (buckets_[i].size() == 0) continue;
+
+        nlohmann::json b_obj;
+        b_obj["bucket_index"] = i;
+        b_obj["size"] = buckets_[i].size();
+        b_obj["replacements"] = buckets_[i].replacement_count();
+
+        nlohmann::json contacts_arr = nlohmann::json::array();
+        for (const auto& peer : buckets_[i].get_peers()) {
+            contacts_arr.push_back({
+                {"node_id", peer.node_id.to_hex()},
+                {"host",    peer.address.host},
+                {"port",    peer.address.port}
+            });
+            total++;
+        }
+        b_obj["contacts"] = contacts_arr;
+        buckets_arr.push_back(b_obj);
     }
+
+    root["total_contacts"] = total;
+    root["active_buckets"] = buckets_arr;
+    return root.dump(2);
 }
 
 } // namespace p2p::dht

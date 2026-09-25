@@ -1,0 +1,75 @@
+# docker-compose.ring.yml — 5-node Ring Bootstrap Topology (E2-8)
+services:
+  node0:
+    build: .
+    container_name: p2p-ring-node0
+    command: ["--config", "/etc/p2p/ring/node0.toml", "--port", "9000", "--data-dir", "/data/node0", "--bootstrap", "p2p-ring-node4:9000", "--log-level", "info"]
+    volumes:
+      - ./config/ring/node0.toml:/etc/p2p/ring/node0.toml:ro
+      - ring_node0_data:/data/node0
+      - ./results:/results
+    networks:
+      - ring_net
+
+  node1:
+    build: .
+    container_name: p2p-ring-node1
+    command: ["--config", "/etc/p2p/ring/node1.toml", "--port", "9000", "--data-dir", "/data/node1", "--bootstrap", "p2p-ring-node0:9000", "--log-level", "info"]
+    volumes:
+      - ./config/ring/node1.toml:/etc/p2p/ring/node1.toml:ro
+      - ring_node1_data:/data/node1
+      - ./results:/results
+    networks:
+      - ring_net
+    depends_on:
+      - node0
+
+  node2:
+    build: .
+    container_name: p2p-ring-node2
+    command: ["--config", "/etc/p2p/ring/node2.toml", "--port", "9000", "--data-dir", "/data/node2", "--bootstrap", "p2p-ring-node1:9000", "--log-level", "info"]
+    volumes:
+      - ./config/ring/node2.toml:/etc/p2p/ring/node2.toml:ro
+      - ring_node2_data:/data/node2
+      - ./results:/results
+    networks:
+      - ring_net
+    depends_on:
+      - node1
+
+  node3:
+    build: .
+    container_name: p2p-ring-node3
+    command: ["--config", "/etc/p2p/ring/node3.toml", "--port", "9000", "--data-dir", "/data/node3", "--bootstrap", "p2p-ring-node2:9000", "--log-level", "info"]
+    volumes:
+      - ./config/ring/node3.toml:/etc/p2p/ring/node3.toml:ro
+      - ring_node3_data:/data/node3
+      - ./results:/results
+    networks:
+      - ring_net
+    depends_on:
+      - node2
+
+  node4:
+    build: .
+    container_name: p2p-ring-node4
+    command: ["--config", "/etc/p2p/ring/node4.toml", "--port", "9000", "--data-dir", "/data/node4", "--bootstrap", "p2p-ring-node3:9000", "--log-level", "info"]
+    volumes:
+      - ./config/ring/node4.toml:/etc/p2p/ring/node4.toml:ro
+      - ring_node4_data:/data/node4
+      - ./results:/results
+    networks:
+      - ring_net
+    depends_on:
+      - node3
+
+networks:
+  ring_net:
+    driver: bridge
+
+volumes:
+  ring_node0_data:
+  ring_node1_data:
+  ring_node2_data:
+  ring_node3_data:
+  ring_node4_data:

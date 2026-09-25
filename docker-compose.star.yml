@@ -1,0 +1,75 @@
+# docker-compose.star.yml — 5-node Star Bootstrap Topology (E2-8)
+services:
+  node0:
+    build: .
+    container_name: p2p-star-node0
+    command: ["--config", "/etc/p2p/star/node0.toml", "--port", "9000", "--data-dir", "/data/node0", "--log-level", "info"]
+    volumes:
+      - ./config/star/node0.toml:/etc/p2p/star/node0.toml:ro
+      - star_node0_data:/data/node0
+      - ./results:/results
+    networks:
+      - star_net
+
+  node1:
+    build: .
+    container_name: p2p-star-node1
+    command: ["--config", "/etc/p2p/star/node1.toml", "--port", "9000", "--data-dir", "/data/node1", "--bootstrap", "p2p-star-node0:9000", "--log-level", "info"]
+    volumes:
+      - ./config/star/node1.toml:/etc/p2p/star/node1.toml:ro
+      - star_node1_data:/data/node1
+      - ./results:/results
+    networks:
+      - star_net
+    depends_on:
+      - node0
+
+  node2:
+    build: .
+    container_name: p2p-star-node2
+    command: ["--config", "/etc/p2p/star/node2.toml", "--port", "9000", "--data-dir", "/data/node2", "--bootstrap", "p2p-star-node0:9000", "--log-level", "info"]
+    volumes:
+      - ./config/star/node2.toml:/etc/p2p/star/node2.toml:ro
+      - star_node2_data:/data/node2
+      - ./results:/results
+    networks:
+      - star_net
+    depends_on:
+      - node0
+
+  node3:
+    build: .
+    container_name: p2p-star-node3
+    command: ["--config", "/etc/p2p/star/node3.toml", "--port", "9000", "--data-dir", "/data/node3", "--bootstrap", "p2p-star-node0:9000", "--log-level", "info"]
+    volumes:
+      - ./config/star/node3.toml:/etc/p2p/star/node3.toml:ro
+      - star_node3_data:/data/node3
+      - ./results:/results
+    networks:
+      - star_net
+    depends_on:
+      - node0
+
+  node4:
+    build: .
+    container_name: p2p-star-node4
+    command: ["--config", "/etc/p2p/star/node4.toml", "--port", "9000", "--data-dir", "/data/node4", "--bootstrap", "p2p-star-node0:9000", "--log-level", "info"]
+    volumes:
+      - ./config/star/node4.toml:/etc/p2p/star/node4.toml:ro
+      - star_node4_data:/data/node4
+      - ./results:/results
+    networks:
+      - star_net
+    depends_on:
+      - node0
+
+networks:
+  star_net:
+    driver: bridge
+
+volumes:
+  star_node0_data:
+  star_node1_data:
+  star_node2_data:
+  star_node3_data:
+  star_node4_data:

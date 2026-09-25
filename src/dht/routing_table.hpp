@@ -47,6 +47,9 @@ public:
     /// Distribution of contacts across all 256 buckets (useful for metrics & proof of non-degeneracy).
     [[nodiscard]] std::vector<std::size_t> bucket_distribution() const;
 
+    /// Export routing table state to JSON string (for metrics and E2-8 verification).
+    [[nodiscard]] std::string to_json() const;
+
     /// Get index of bucket for a given NodeID relative to local node (0..255).
     /// Returns -1 if `id == local_id_`.
     [[nodiscard]] int get_bucket_index(const NodeID& id) const;
