@@ -11,6 +11,12 @@
 - **End-to-End шифрование** — ChaCha20-Poly1305 / AES-256-GCM
 - **Передача файлов** — блочная передача с контролем целостности
 
+## Документация проекта
+
+- [Архитектурная спецификация (docs/architecture.md)](file:///c:/school/4cource/seti/p2p-overlay/docs/architecture.md) — детальное описание 7 подсистем, алгоритмов поиска, 4 графов сети, AKE, луковичной маршрутизации и фасада API
+- [Спецификация протокола (docs/protocol_spec.md)](file:///c:/school/4cource/seti/p2p-overlay/docs/protocol_spec.md) — формат кадра, бинарные заголовки, типы сообщений и схемы CBOR
+- [Сравнение форматов сериализации (docs/serialization_comparison.md)](file:///c:/school/4cource/seti/p2p-overlay/docs/serialization_comparison.md) — обоснование выбора CBOR (RFC 8949) против MessagePack и JSON
+
 ## Требования
 
 - Docker и Docker Compose
