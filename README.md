@@ -95,7 +95,7 @@ orchestrator/                 # Python-оркестратор экспериме
 ## Текущий статус
 
 - [x] **Этап 1**: Transport + Frame + Identity
-- [ ] **Этап 2**: Kademlia DHT (ядро реализовано; идёт сетевая интеграция, bootstrap и тесты E2-1..E2-8)
+- [x] **Этап 2**: Kademlia DHT (E2-1..E2-8: KBucket LRU, RoutingTable 256, async lookup alpha=3, bootstrap self-lookup, LRU/negative/integration тесты, star/ring схемы)
 - [ ] Этап 3: STORE, FIND_VALUE, записи
 - [ ] Этап 4: AKE-протокол
 - [ ] Этап 5: Туннели
