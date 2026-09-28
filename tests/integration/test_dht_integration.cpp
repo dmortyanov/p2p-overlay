@@ -25,7 +25,7 @@ config::Config make_test_config(uint16_t port, const std::string& data_dir,
     cfg.dht.alpha = 3;
     cfg.dht.replication = 3;
     cfg.transport.connect_timeout_ms = 1000;
-    cfg.transport.rpc_timeout_ms = 1000;
+    cfg.transport.io_timeout_ms = 1000;
     cfg.bootstrap.peers = bootstrap;
     return cfg;
 }

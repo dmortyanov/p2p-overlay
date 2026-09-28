@@ -103,9 +103,8 @@ TEST_CASE("XOR distance to different node is non-zero", "[xor]") {
 }
 
 TEST_CASE("XOR triangle inequality", "[xor]") {
-    // d(a,c) <= d(a,b) XOR d(b,c) is always true for XOR metric
-    // But more importantly, XOR is a proper ultrametric:
-    // d(a,c) <= max(d(a,b), d(b,c))
+    // Kademlia metric property:
+    // d(a, c) = d(a, b) XOR d(b, c)
     auto kp1 = Keypair::generate();
     auto kp2 = Keypair::generate();
     auto kp3 = Keypair::generate();
@@ -114,10 +113,7 @@ TEST_CASE("XOR triangle inequality", "[xor]") {
     auto dbc = xor_distance(kp2.node_id(), kp3.node_id());
     auto dac = xor_distance(kp1.node_id(), kp3.node_id());
 
-    // In XOR metric, d(a,c) <= d(a,b) + d(b,c) is trivially satisfied
-    // since XOR never "adds up" — it's actually an ultrametric
-    auto max_dist = (dab > dbc) ? dab : dbc;
-    CHECK(dac <= max_dist);
+    CHECK(dac == xor_distance(dab, dbc));
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -134,4 +134,10 @@ if(BUILD_TESTS)
     add_executable(test_dht_integration tests/integration/test_dht_integration.cpp)
     target_link_libraries(test_dht_integration PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_dht_integration COMMAND test_dht_integration)
+
+    set_tests_properties(
+        test_frame test_node_id test_k_bucket test_routing_table
+        test_lookup test_lru_scenarios test_negative_identity test_dht_integration
+        PROPERTIES TIMEOUT 30
+    )
 endif()

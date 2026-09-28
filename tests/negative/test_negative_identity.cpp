@@ -57,28 +57,30 @@ TEST_CASE("E2-2 Negative: Mismatched public key and NodeID must be rejected", "[
 
 TEST_CASE("E2-2 Negative: Signature tampering must be rejected", "[negative][identity]") {
     auto kp = Keypair::generate();
-    std::string message = "FIND_NODE_REQUEST payload";
+    std::string msg_str = "FIND_NODE_REQUEST payload";
+    Bytes message(msg_str.begin(), msg_str.end());
     auto sig = kp.sign(message);
 
     // Valid signature verifies
-    REQUIRE(kp.verify(message, sig));
+    REQUIRE(Keypair::verify(sig, message.data(), message.size(), kp.public_key()));
 
     // Tampered message fails
     SECTION("Modified payload fails verification") {
-        std::string tampered_message = "FIND_NODE_REQUEST tampered";
-        REQUIRE_FALSE(kp.verify(tampered_message, sig));
+        std::string tampered_str = "FIND_NODE_REQUEST tampered";
+        Bytes tampered_message(tampered_str.begin(), tampered_str.end());
+        REQUIRE_FALSE(Keypair::verify(sig, tampered_message.data(), tampered_message.size(), kp.public_key()));
     }
 
     // Tampered signature byte fails
     SECTION("Corrupted signature fails verification") {
         auto tampered_sig = sig;
         tampered_sig[0] ^= 0x55;
-        REQUIRE_FALSE(kp.verify(message, tampered_sig));
+        REQUIRE_FALSE(Keypair::verify(tampered_sig, message.data(), message.size(), kp.public_key()));
     }
 
     // Verification with another keypair's public key fails
     SECTION("Verification with another public key fails") {
         auto other_kp = Keypair::generate();
-        REQUIRE_FALSE(other_kp.verify(message, sig));
+        REQUIRE_FALSE(Keypair::verify(sig, message.data(), message.size(), other_kp.public_key()));
     }
 }

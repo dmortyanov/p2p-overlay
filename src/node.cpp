@@ -92,12 +92,15 @@ void Node::stop() {
         listener_->stop();
     }
 
+    std::vector<transport::TcpConnection::Ptr> to_close;
     {
         std::lock_guard lock(conns_mutex_);
-        for (auto& conn : connections_) {
-            conn->close("node shutdown");
-        }
+        to_close = std::move(connections_);
         connections_.clear();
+    }
+
+    for (auto& conn : to_close) {
+        conn->close("node shutdown");
     }
 
     io_.stop();
@@ -141,6 +144,7 @@ void Node::connect_to_peer(const std::string& host, uint16_t port) {
     j["node_id"] = node_id().to_hex();
     j["public_key"] = nlohmann::json::binary_t(
         {keypair_->public_key().begin(), keypair_->public_key().end()});
+    j["listen_port"] = config_.node.listen_port;
     auto cbor = nlohmann::json::to_cbor(j);
     ping.payload.assign(cbor.begin(), cbor.end());
 
@@ -251,11 +255,12 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                         spdlog::info("PING from verified NodeID={}", peer_id.to_short_hex());
 
                         // Update routing table
+                        uint16_t peer_port = j.value("listen_port", conn->remote_port());
                         PeerInfo peer{
                             .node_id = peer_id,
                             .address = PeerAddress{
-                                .host = conn->remote_endpoint_str(),
-                                .port = config_.node.listen_port
+                                .host = conn->remote_ip(),
+                                .port = peer_port
                             }
                         };
                         routing_table_->add_or_update(peer);
@@ -273,6 +278,7 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
             j["node_id"] = node_id().to_hex();
             j["public_key"] = nlohmann::json::binary_t(
                 {keypair_->public_key().begin(), keypair_->public_key().end()});
+            j["listen_port"] = config_.node.listen_port;
             auto cbor = nlohmann::json::to_cbor(j);
             pong.payload.assign(cbor.begin(), cbor.end());
 
@@ -310,11 +316,12 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                         spdlog::info("PONG from verified NodeID={}", peer_id.to_short_hex());
 
                         // Update routing table
+                        uint16_t peer_port = j.value("listen_port", conn->remote_port());
                         PeerInfo peer{
                             .node_id = peer_id,
                             .address = PeerAddress{
-                                .host = conn->remote_endpoint_str(),
-                                .port = config_.node.listen_port
+                                .host = conn->remote_ip(),
+                                .port = peer_port
                             }
                         };
                         routing_table_->add_or_update(peer);
@@ -479,6 +486,7 @@ void Node::async_lookup(const NodeID& target,
                     io_, peer.address.host, peer.address.port,
                     std::chrono::milliseconds(config_.transport.connect_timeout_ms));
                 if (conn) {
+                    conn->set_peer_id(peer.node_id);
                     register_connection(conn);
                 }
             }

@@ -31,12 +31,17 @@ TcpConnection::Ptr TcpConnection::connect(
     std::chrono::milliseconds timeout)
 {
     asio::ip::tcp::resolver resolver(io);
-    auto endpoints = resolver.resolve(host, std::to_string(port));
+    asio::error_code ec;
+    auto endpoints = resolver.resolve(host, std::to_string(port), ec);
+
+    if (ec) {
+        spdlog::error("Failed to resolve {}:{} — {}", host, port, ec.message());
+        return nullptr;
+    }
 
     asio::ip::tcp::socket socket(io);
 
     // Synchronous connect with error handling
-    asio::error_code ec;
     asio::connect(socket, endpoints, ec);
 
     if (ec) {
@@ -59,6 +64,22 @@ std::string TcpConnection::remote_endpoint_str() const {
         return ep.address().to_string() + ":" + std::to_string(ep.port());
     } catch (...) {
         return "<unknown>";
+    }
+}
+
+std::string TcpConnection::remote_ip() const {
+    try {
+        return socket_.remote_endpoint().address().to_string();
+    } catch (...) {
+        return "127.0.0.1";
+    }
+}
+
+uint16_t TcpConnection::remote_port() const {
+    try {
+        return socket_.remote_endpoint().port();
+    } catch (...) {
+        return 0;
     }
 }
 

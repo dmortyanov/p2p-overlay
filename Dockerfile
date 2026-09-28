@@ -36,13 +36,25 @@ COPY src/ ./src/
 COPY tests/ ./tests/
 COPY config/ ./config/
 
-# Install dependencies and build
+# Install dependencies and build (production — no tests)
 RUN cmake -B build \
     -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_TESTS=OFF \
     -G Ninja && \
     cmake --build build --target p2p_node
+
+# ─── Test image (docker build --target tester .) ─────────────────
+FROM builder AS tester
+
+RUN cmake -B build_test \
+    -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DBUILD_TESTS=ON \
+    -G Ninja && \
+    cmake --build build_test
+
+CMD ["ctest", "--test-dir", "/app/build_test", "--output-on-failure"]
 
 # ─── Runtime image ───────────────────────────────────────────────
 FROM ubuntu:24.04
@@ -65,3 +77,4 @@ EXPOSE 9000
 
 ENTRYPOINT ["p2p_node"]
 CMD ["--config", "/etc/p2p/default.toml", "--data-dir", "/data"]
+

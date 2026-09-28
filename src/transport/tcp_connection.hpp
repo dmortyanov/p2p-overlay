@@ -81,8 +81,14 @@ public:
     /// Get the peer's NodeID (if known).
     [[nodiscard]] std::optional<NodeID> peer_id() const { return peer_id_; }
 
-    /// Get remote endpoint as string.
+    /// Get remote endpoint as string (host:port).
     [[nodiscard]] std::string remote_endpoint_str() const;
+
+    /// Get remote IP address string.
+    [[nodiscard]] std::string remote_ip() const;
+
+    /// Get remote port.
+    [[nodiscard]] uint16_t remote_port() const;
 
     /// Check if the connection is open.
     [[nodiscard]] bool is_open() const { return socket_.is_open(); }

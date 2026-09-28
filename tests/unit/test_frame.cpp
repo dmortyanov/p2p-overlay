@@ -20,6 +20,12 @@
 #include <cstring>
 #include <random>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#endif
+
 using namespace p2p;
 using namespace p2p::transport;
 
