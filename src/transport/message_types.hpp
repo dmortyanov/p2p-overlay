@@ -64,6 +64,12 @@ inline constexpr FrameFlags operator|(FrameFlags a, FrameFlags b) {
         static_cast<uint16_t>(a) | static_cast<uint16_t>(b));
 }
 
+/// Compound assignment OR for flags.
+inline constexpr FrameFlags& operator|=(FrameFlags& a, FrameFlags b) {
+    a = a | b;
+    return a;
+}
+
 /// Check if a flag is set.
 inline constexpr bool operator&(FrameFlags a, FrameFlags b) {
     return (static_cast<uint16_t>(a) & static_cast<uint16_t>(b)) != 0;

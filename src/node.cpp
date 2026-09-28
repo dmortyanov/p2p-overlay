@@ -5,6 +5,7 @@
 #include "dht/dht_messages.hpp"
 #include "identity/node_id.hpp"
 
+#include <sodium.h>
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
 
@@ -250,12 +251,11 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                         spdlog::info("PING from verified NodeID={}", peer_id.to_short_hex());
 
                         // Update routing table
-                        auto endpoint = conn->remote_endpoint();
                         PeerInfo peer{
                             .node_id = peer_id,
                             .address = PeerAddress{
-                                .host = endpoint.address().to_string(),
-                                .port = endpoint.port()
+                                .host = conn->remote_endpoint_str(),
+                                .port = config_.node.listen_port
                             }
                         };
                         routing_table_->add_or_update(peer);
@@ -310,12 +310,11 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                         spdlog::info("PONG from verified NodeID={}", peer_id.to_short_hex());
 
                         // Update routing table
-                        auto endpoint = conn->remote_endpoint();
                         PeerInfo peer{
                             .node_id = peer_id,
                             .address = PeerAddress{
-                                .host = endpoint.address().to_string(),
-                                .port = endpoint.port()
+                                .host = conn->remote_endpoint_str(),
+                                .port = config_.node.listen_port
                             }
                         };
                         routing_table_->add_or_update(peer);
@@ -507,12 +506,12 @@ void Node::async_lookup(const NodeID& target,
             req_frame.payload = std::move(payload);
 
             auto timer = std::make_shared<asio::steady_timer>(
-                io_, std::chrono::milliseconds(config_.transport.rpc_timeout_ms));
+                io_, std::chrono::milliseconds(config_.transport.io_timeout_ms));
             auto peer_id = peer.node_id;
 
             {
                 std::lock_guard lock(pending_mutex_);
-                pending_requests_[rid] = [session, peer_id, this, timer, step_func](const transport::Frame& resp_frame) {
+                pending_requests_[rid] = [session, peer_id, this, timer = timer, step_func](const transport::Frame& resp_frame) {
                     timer->cancel();
                     dht::FindNodeResponse resp;
                     if (dht::deserialize_find_node_response(resp_frame.payload, resp)) {

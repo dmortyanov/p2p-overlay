@@ -10,8 +10,14 @@ RUN apt-get update && apt-get install -y \
     curl \
     zip \
     unzip \
+    tar \
     pkg-config \
     ninja-build \
+    autoconf \
+    autoconf-archive \
+    automake \
+    libtool \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install vcpkg
@@ -19,9 +25,13 @@ ENV VCPKG_ROOT=/opt/vcpkg
 RUN git clone --depth 1 https://github.com/microsoft/vcpkg.git ${VCPKG_ROOT} && \
     ${VCPKG_ROOT}/bootstrap-vcpkg.sh -disableMetrics
 
-# Copy project files
+# Copy dependency manifest first to cache vcpkg build
 WORKDIR /app
-COPY vcpkg.json CMakeLists.txt ./
+COPY vcpkg.json ./
+RUN ${VCPKG_ROOT}/vcpkg install --triplet x64-linux
+
+# Copy project files
+COPY CMakeLists.txt ./
 COPY src/ ./src/
 COPY tests/ ./tests/
 COPY config/ ./config/

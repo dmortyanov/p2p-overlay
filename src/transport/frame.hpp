@@ -75,6 +75,11 @@ struct Frame {
         return FRAME_HEADER_SIZE + payload.size();
     }
 
+    /// Construct a frame with given type and request ID.
+    Frame() = default;
+    Frame(MessageType t, const RequestID& rid)
+        : type(t), request_id(rid) {}
+
     /// Serialize this frame into a byte buffer (header + payload).
     /// Returns the serialized bytes ready for TCP write.
     [[nodiscard]] Bytes serialize() const;
