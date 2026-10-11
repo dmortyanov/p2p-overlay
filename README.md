@@ -37,11 +37,17 @@
   - Асинхронный сервер [`TcpListener`](src/transport/tcp_listener.hpp) и сессии [`TcpConnection`](src/transport/tcp_connection.hpp) с очередью записи;
   - Двоичный 24-байтовый заголовок кадра ([`Frame`](src/transport/frame.hpp)): `version`, `type`, `flags`, `request_id` (16B), `payload_length` (4B);
   - Потоковый декодер [`FrameParser`](src/transport/frame.hpp) со скользящим буфером, устойчивый к склейке TCP-пакетов, частичным заголовкам и фрагментации;
-  - Жёсткая валидация `MAX_FRAME_PAYLOAD = 65 536` байт до выделения буфера памяти;
+  - **Динамическая настройка (E1-2)**: версия протокола (`protocol_version`) и предельный размер кадра (`max_frame_payload`) конфигурируются через TOML без перекомпиляции;
+  - **Тайм-ауты и мониторинг активности (E1-3)**: настраиваемый таймаут на установление TCP-соединения (`connect_timeout_ms`) и сторожевой таймер неактивности сокета (`io_timeout_ms`), закрывающий простаивающие соединения; независимый запуск двух процессов подтверждён в [`scripts/test_two_nodes.py`](scripts/test_two_nodes.py) с сохранением журналов в `results/two_nodes_node1.log` и `node2.log`;
   - Долговременная пара ключей Ed25519 ([`Keypair`](src/identity/keypair.hpp)) с сохранением в `node_state_dir`;
   - Детерминированный идентификатор $NodeID = \text{SHA-256}(\text{identity\_public\_key})$;
-  - Конфигурационный модуль [`Config`](src/config/config.hpp) на базе TOML.
-- **Тесты**: [`test_frame.cpp`](tests/unit/test_frame.cpp) (стресс-тест из 120 кадров со случайным разбиением потока), [`test_node_id.cpp`](tests/unit/test_node_id.cpp) (XOR-расстояние, Ed25519 подписи).
+  - Конфигурационный модуль [`Config`](src/config/config.hpp) на базе TOML;
+  - **Корреляция RPC и защита PONG (E1-6)**: сопоставление PONG с PING по `request_id`, отбрасывание непрошеных ответов и проверка совпадения `NodeID` отвечающего узла с ожидаемым;
+  - **Инженерное сравнение сериализации (E1-8)**: сопоставление JSON, CBOR и MessagePack с замерами (`scripts/benchmark_serialization.py`) и сводным отчётом в [`docs/serialization_comparison.md`](docs/serialization_comparison.md) (выигрыш CBOR ~25.2%).
+- **Тесты**: 
+  - [`test_frame.cpp`](tests/unit/test_frame.cpp) (стресс-тест из 120 кадров со случайной фрагментацией потока порциями 1..256 байт, а также тест динамической реконфигурации);
+  - [`test_node_id.cpp`](tests/unit/test_node_id.cpp) (XOR-расстояние, Ed25519 подписи);
+  - [`test_negative_transport.cpp`](tests/negative/test_negative_transport.cpp) (неизвестная версия/тип, превышение payload, обрыв внутри кадра, непрошеный PONG — **E1-7**).
 
 ### Этап 2. Kademlia DHT и обнаружение узлов (Node Discovery)
 - **Цель**: Реализация распределённой таблицы маршрутизации, итеративного поиска узлов и децентрализованной процедуры bootstrap.
@@ -52,17 +58,19 @@
   - Сериализация RPC-сообщений [`dht_messages`](src/dht/dht_messages.hpp) в компактный CBOR (`FIND_NODE_REQUEST`, `FIND_NODE_RESPONSE`);
   - Конечный автомат [`LookupSession`](src/dht/lookup_engine.hpp) для параллельного итеративного поиска с фактором $\alpha = 3$;
   - Сетевой метод [`Node::async_lookup`](src/node.cpp) с автоматическим установлением соединений к новым найденным узлам;
-  - Процедура **децентрализованного Bootstrap**: при старте узел подключается к seed-узлу и выполняет `self-lookup` для заполнения таблицы маршрутизации;
-  - Взаимная корреляция RPC-ответов по `request_id` через таблицу отложенных запросов;
-  - Защита от спуфинга: узел отклоняет и сбрасывает соединение при несоответствии claimed $NodeID$ и переданного открытого ключа (`E2-2`);
-  - Экспорт состояния бакетов в JSON для подтверждения невырожденности (`E2-8`).
+  - **Децентрализованный Bootstrap (E2-7)**: при старте узел подключается к seed-узлу и выполняет `self-lookup` для заполнения таблицы маршрутизации;
+  - **Строгая предварительная валидация Identity (E2-2)**: узел проверяет наличие `public_key` и точное соответствие `node_id == SHA-256(public_key)` ДО сохранения пира в routing table и ДО отправки PONG;
+  - **Сетевой LRU-probe (E2-4)**: при попытке добавления в заполненный бакет узел опрашивает наименее активный контакт по сети: живой узел остаётся в голове как MRU, недоступный немедленно вытесняется кандидатом;
+  - **Две схемы Bootstrap — Star и Ring (E2-8)**: автоматизированный запуск 5-узловых кластеров скриптом [`scripts/run_topology_dump.py`](scripts/run_topology_dump.py) с экспортом таблиц маршрутизации в `results/star/` и `results/ring/`;
+  - **Расширенный пилотный прогон (E2-9)**: выполнение серии из 10 многопереходных поисков скриптом [`scripts/run_pilot_lookups.py`](scripts/run_pilot_lookups.py) с записью метрик (hops, latency) в `results/pilot_lookups.csv`.
 - **Тесты**:
   - [`test_k_bucket.cpp`](tests/unit/test_k_bucket.cpp) — проверка переполнения и очереди кандидатов;
   - [`test_routing_table.cpp`](tests/unit/test_routing_table.cpp) — индексы 0..255 и ранжирование по XOR;
   - [`test_lookup.cpp`](tests/unit/test_lookup.cpp) — сходимость итеративного поиска $\alpha = 3$ в графе;
-  - [`test_lru_scenarios.cpp`](tests/unit/test_lru_scenarios.cpp) — **два обязательных сценария E2-4**: живой LRU-контакт остаётся в бакете после проверки, недоступный контакт вытесняется кандидатом;
+  - [`test_lru_scenarios.cpp`](tests/unit/test_lru_scenarios.cpp) — **три обязательных сценария E2-4**: живой LRU-контакт остаётся в бакете после проверки, недоступный контакт вытесняется кандидатом, сетевой probe через фасад `Node`;
   - [`test_negative_identity.cpp`](tests/negative/test_negative_identity.cpp) — отсечение атак с поддельными ключами (`E2-2`);
-  - [`test_dht_integration.cpp`](tests/integration/test_dht_integration.cpp) — сетевой обмен по TCP и работа кластера из 5 узлов после остановки seed-узла (`E2-5`, `E2-7`).
+  - [`test_dht_integration.cpp`](tests/integration/test_dht_integration.cpp) — сетевой обмен по TCP, 5-узловой кластер после отключения seed (`E2-7`), и многошаговый итеративный поиск через промежуточный узел (`E2-6`);
+  - [`test_negative_transport.cpp`](tests/negative/test_negative_transport.cpp) — отбрасывание непрошеных и некорректных PONG (`E1-6`, `E2-5`).
 
 ### Этап 3. Хранение записей в DHT (STORE, FIND_VALUE, псевдонимы)
 - **Цель**: Распределённое хранение и разрешение записей узлов (`NodeRecord`) и псевдонимов (`AliasRecord`) с гарантией устойчивости к отказу хранителей.

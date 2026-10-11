@@ -60,6 +60,9 @@ public:
     /// Mark query failure for a contact in its respective bucket.
     void mark_failed(const NodeID& id);
 
+    /// Touch a contact to update its last_seen timestamp and preserve it as MRU (E2-4).
+    void touch(const NodeID& id);
+
     /// Clear all buckets.
     void clear();
 

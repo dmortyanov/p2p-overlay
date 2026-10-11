@@ -93,6 +93,12 @@ public:
     /// Check if the connection is open.
     [[nodiscard]] bool is_open() const { return socket_.is_open(); }
 
+    /// Configure protocol version, max payload, and I/O timeout (E1-2, E1-3).
+    void configure(uint8_t version, uint32_t max_payload, std::chrono::milliseconds io_timeout);
+
+    /// Reset I/O watchdog timer.
+    void reset_io_timer();
+
 private:
     explicit TcpConnection(asio::ip::tcp::socket socket);
 
@@ -118,6 +124,10 @@ private:
     // Write queue
     std::queue<Bytes> write_queue_;
     bool              writing_ = false;
+
+    // Inactivity watchdog timer (E1-3)
+    asio::steady_timer        io_timer_;
+    std::chrono::milliseconds io_timeout_{10000};
 };
 
 } // namespace p2p::transport

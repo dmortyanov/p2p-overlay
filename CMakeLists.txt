@@ -135,9 +135,14 @@ if(BUILD_TESTS)
     target_link_libraries(test_dht_integration PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_dht_integration COMMAND test_dht_integration)
 
+    # E1-6 & E1-7: Negative transport tests (protocol violation, oversized, abrupt disconnect, unsolicited PONG)
+    add_executable(test_negative_transport tests/negative/test_negative_transport.cpp)
+    target_link_libraries(test_negative_transport PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_negative_transport COMMAND test_negative_transport)
+
     set_tests_properties(
         test_frame test_node_id test_k_bucket test_routing_table
-        test_lookup test_lru_scenarios test_negative_identity test_dht_integration
+        test_lookup test_lru_scenarios test_negative_identity test_negative_transport test_dht_integration
         PROPERTIES TIMEOUT 30
     )
 endif()

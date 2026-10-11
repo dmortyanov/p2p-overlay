@@ -269,12 +269,13 @@ TEST_CASE("Frame flags are preserved", "[frame]") {
 //  100+ frames stress test (TZ requirement)
 // ═══════════════════════════════════════════════════════════════════
 
-TEST_CASE("100 frames of variable length", "[frame][stress]") {
+TEST_CASE("100 frames of variable length with randomized stream chunking (E1-5)", "[frame][stress]") {
     std::mt19937 rng(42); // deterministic seed
     std::uniform_int_distribution<int> size_dist(0, 4096);
 
     FrameParser parser;
     std::vector<Frame> originals;
+    Bytes combined_stream;
 
     for (int i = 0; i < 120; ++i) {
         Frame f;
@@ -288,34 +289,72 @@ TEST_CASE("100 frames of variable length", "[frame][stress]") {
         }
 
         originals.push_back(f);
-
-        // Simulate realistic TCP: sometimes feed multiple frames at once,
-        // sometimes split a frame across feeds
         auto wire = f.serialize();
-        if (i % 3 == 0 && !wire.empty()) {
-            // Split in the middle
-            std::size_t split = wire.size() / 2;
-            parser.feed(wire.data(), split);
-            parser.feed(wire.data() + split, wire.size() - split);
-        } else {
-            parser.feed(wire);
+        combined_stream.insert(combined_stream.end(), wire.begin(), wire.end());
+    }
+
+    // Feed combined stream in truly random chunks (1..256 bytes) to simulate realistic TCP fragmentation
+    std::uniform_int_distribution<std::size_t> chunk_dist(1, 256);
+    std::size_t offset = 0;
+    std::vector<Frame> parsed_frames;
+
+    while (offset < combined_stream.size()) {
+        std::size_t chunk_len = std::min(chunk_dist(rng), combined_stream.size() - offset);
+        parser.feed(combined_stream.data() + offset, chunk_len);
+        offset += chunk_len;
+
+        while (true) {
+            auto result = parser.next_frame();
+            if (!result.has_value()) break;
+            parsed_frames.push_back(std::move(result.value()));
         }
     }
 
-    // Extract all frames
-    int count = 0;
-    while (true) {
-        auto result = parser.next_frame();
-        if (!result.has_value()) break;
-
-        REQUIRE(count < static_cast<int>(originals.size()));
-        CHECK(result->type == originals[count].type);
-        CHECK(result->request_id == originals[count].request_id);
-        CHECK(result->payload == originals[count].payload);
-        ++count;
+    REQUIRE(parsed_frames.size() == originals.size());
+    for (std::size_t i = 0; i < originals.size(); ++i) {
+        CHECK(parsed_frames[i].type == originals[i].type);
+        CHECK(parsed_frames[i].request_id == originals[i].request_id);
+        CHECK(parsed_frames[i].payload == originals[i].payload);
     }
+}
 
-    CHECK(count == 120);
+TEST_CASE("FrameParser configurable version and payload limits (E1-2)", "[frame][config]") {
+    // Configured with protocol_version = 2 and max_payload = 1024
+    FrameParser custom_parser(2, 1024);
+    CHECK(custom_parser.expected_version() == 2);
+    CHECK(custom_parser.max_payload() == 1024);
+
+    // Frame with version 1 is now rejected
+    Frame f_v1;
+    f_v1.version = 1;
+    f_v1.type = MessageType::PING;
+    f_v1.request_id = RequestID::generate();
+    custom_parser.feed(f_v1.serialize());
+    auto res1 = custom_parser.next_frame();
+    REQUIRE(!res1.has_value());
+    CHECK(res1.error() == FrameError::UnsupportedVersion);
+
+    // Frame with version 2 is accepted
+    Frame f_v2;
+    f_v2.version = 2;
+    f_v2.type = MessageType::PING;
+    f_v2.request_id = RequestID::generate();
+    f_v2.payload = {0x01, 0x02};
+    custom_parser.feed(f_v2.serialize());
+    auto res2 = custom_parser.next_frame();
+    REQUIRE(res2.has_value());
+    CHECK(res2->version == 2);
+
+    // Oversized payload for custom max (2000 > 1024)
+    Frame f_oversized;
+    f_oversized.version = 2;
+    f_oversized.type = MessageType::APP_MESSAGE;
+    f_oversized.request_id = RequestID::generate();
+    f_oversized.payload.resize(2000, 0xFF);
+    custom_parser.feed(f_oversized.serialize());
+    auto res3 = custom_parser.next_frame();
+    REQUIRE(!res3.has_value());
+    CHECK(res3.error() == FrameError::PayloadTooLarge);
 }
 
 // ═══════════════════════════════════════════════════════════════════

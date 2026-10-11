@@ -96,14 +96,14 @@ void Node::stop() {
     {
         std::lock_guard lock(conns_mutex_);
         to_close = std::move(connections_);
-        connections_.clear();
     }
 
     for (auto& conn : to_close) {
-        conn->close("node shutdown");
+        conn->close("Node shutting down");
     }
 
     io_.stop();
+    spdlog::info("Node {} stopped", node_id().to_short_hex());
 }
 
 // ─── Run ────────────────────────────────────────────────────────────
@@ -134,12 +134,23 @@ void Node::connect_to_peer(const std::string& host, uint16_t port) {
     }
 
     register_connection(conn);
+    send_ping(conn);
+}
 
-    // Send a PING to introduce ourselves
+// ─── Ping with correlation (E1-6, E2-5) ──────────────────────────────
+
+void Node::send_ping(transport::TcpConnection::Ptr conn,
+                     std::optional<NodeID> expected_peer_id,
+                     std::function<void(bool success)> on_result) {
+    if (!conn || !conn->is_open()) {
+        if (on_result) on_result(false);
+        return;
+    }
+
     auto rid = RequestID::generate();
     auto ping = transport::Frame::make_ping(rid);
+    ping.version = static_cast<uint8_t>(config_.transport.protocol_version);
 
-    // Include our NodeID and public key in the PING payload
     nlohmann::json j;
     j["node_id"] = node_id().to_hex();
     j["public_key"] = nlohmann::json::binary_t(
@@ -148,18 +159,51 @@ void Node::connect_to_peer(const std::string& host, uint16_t port) {
     auto cbor = nlohmann::json::to_cbor(j);
     ping.payload.assign(cbor.begin(), cbor.end());
 
+    auto timer = std::make_shared<asio::steady_timer>(
+        io_, std::chrono::milliseconds(config_.transport.io_timeout_ms));
+
+    {
+        std::lock_guard lock(pending_pings_mutex_);
+        pending_pings_[rid] = PendingPing{
+            .rid = rid,
+            .expected_peer_id = expected_peer_id,
+            .callback = [timer, on_result](bool success) {
+                timer->cancel();
+                if (on_result) on_result(success);
+            }
+        };
+    }
+
+    timer->async_wait([this, rid, timer](const std::error_code& ec) {
+        if (!ec) {
+            std::function<void(bool)> cb;
+            {
+                std::lock_guard lock(pending_pings_mutex_);
+                auto it = pending_pings_.find(rid);
+                if (it != pending_pings_.end()) {
+                    cb = std::move(it->second.callback);
+                    pending_pings_.erase(it);
+                }
+            }
+            if (cb) cb(false);
+        }
+    });
+
     conn->send(ping);
-    spdlog::debug("Sent PING to {}:{} (rid={})", host, port,
+    spdlog::debug("Sent PING to {} (rid={})", conn->remote_endpoint_str(),
                   rid.to_hex().substr(0, 8));
 }
 
 // ─── Ping all ───────────────────────────────────────────────────────
 
 void Node::ping_all() {
-    std::lock_guard lock(conns_mutex_);
-    for (auto& conn : connections_) {
-        auto rid = RequestID::generate();
-        conn->send(transport::Frame::make_ping(rid));
+    std::vector<transport::TcpConnection::Ptr> active_conns;
+    {
+        std::lock_guard lock(conns_mutex_);
+        active_conns = connections_;
+    }
+    for (auto& conn : active_conns) {
+        send_ping(conn);
     }
 }
 
@@ -178,6 +222,11 @@ void Node::on_accept(transport::TcpConnection::Ptr conn) {
 }
 
 void Node::register_connection(transport::TcpConnection::Ptr conn) {
+    // Configure protocol version, max payload, and I/O timeout (E1-2, E1-3)
+    conn->configure(static_cast<uint8_t>(config_.transport.protocol_version),
+                    config_.transport.max_frame_payload,
+                    std::chrono::milliseconds(config_.transport.io_timeout_ms));
+
     // Set up frame handler
     auto weak_conn = std::weak_ptr<transport::TcpConnection>(conn);
     conn->set_frame_handler([this, weak_conn](const transport::Frame& frame) {
@@ -225,110 +274,167 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
 
     switch (frame.type) {
         case MessageType::PING: {
-            // Parse sender info from PING payload
-            if (!frame.payload.empty()) {
-                try {
-                    auto j = nlohmann::json::from_cbor(frame.payload);
-                    if (j.contains("node_id")) {
-                        NodeID peer_id;
-                        if (!NodeID::from_hex(j["node_id"].get<std::string>(), peer_id)) {
-                            spdlog::warn("Malformed NodeID from {}", conn->remote_endpoint_str());
-                            break;
-                        }
-
-                        // Validate claimed NodeID against public key (satisfies E2-2)
-                        if (j.contains("public_key")) {
-                            auto pk_bytes = j["public_key"].get<nlohmann::json::binary_t>();
-                            if (pk_bytes.size() == 32) {
-                                std::array<uint8_t, 32> pk;
-                                std::copy(pk_bytes.begin(), pk_bytes.end(), pk.begin());
-                                if (!identity::verify_node_id(peer_id, pk)) {
-                                    spdlog::warn("E2-2 REJECT: Claimed NodeID {} does NOT match public key from {}",
-                                                 peer_id.to_short_hex(), conn->remote_endpoint_str());
-                                    conn->close("NodeID mismatch with public key");
-                                    break;
-                                }
-                            }
-                        }
-
-                        conn->set_peer_id(peer_id);
-                        spdlog::info("PING from verified NodeID={}", peer_id.to_short_hex());
-
-                        // Update routing table
-                        uint16_t peer_port = j.value("listen_port", conn->remote_port());
-                        PeerInfo peer{
-                            .node_id = peer_id,
-                            .address = PeerAddress{
-                                .host = conn->remote_ip(),
-                                .port = peer_port
-                            }
-                        };
-                        routing_table_->add_or_update(peer);
-                    }
-                } catch (const std::exception& e) {
-                    spdlog::warn("Failed to parse PING payload: {}", e.what());
-                }
+            // E2-2: Strict validation of claimed NodeID against public key
+            // ONLY accept and answer PING if identity is fully verified!
+            if (frame.payload.empty()) {
+                spdlog::warn("Rejected PING with empty payload from {}", conn->remote_endpoint_str());
+                conn->close("Empty PING payload");
+                break;
             }
 
-            // Send PONG
-            auto pong = Frame::make_pong(frame.request_id);
+            try {
+                auto j = nlohmann::json::from_cbor(frame.payload);
+                if (!j.contains("node_id") || !j.contains("public_key")) {
+                    spdlog::warn("Rejected PING missing identity fields from {}", conn->remote_endpoint_str());
+                    conn->close("Missing identity in PING");
+                    break;
+                }
 
-            // Include our identity in PONG too
-            nlohmann::json j;
-            j["node_id"] = node_id().to_hex();
-            j["public_key"] = nlohmann::json::binary_t(
-                {keypair_->public_key().begin(), keypair_->public_key().end()});
-            j["listen_port"] = config_.node.listen_port;
-            auto cbor = nlohmann::json::to_cbor(j);
-            pong.payload.assign(cbor.begin(), cbor.end());
+                NodeID peer_id;
+                if (!NodeID::from_hex(j["node_id"].get<std::string>(), peer_id)) {
+                    spdlog::warn("Malformed NodeID from {}", conn->remote_endpoint_str());
+                    conn->close("Malformed NodeID");
+                    break;
+                }
 
-            conn->send(pong);
+                auto pk_bytes = j["public_key"].get<nlohmann::json::binary_t>();
+                if (pk_bytes.size() != 32) {
+                    spdlog::warn("Invalid public key size in PING from {}", conn->remote_endpoint_str());
+                    conn->close("Invalid public key size");
+                    break;
+                }
+
+                std::array<uint8_t, 32> pk;
+                std::copy(pk_bytes.begin(), pk_bytes.end(), pk.begin());
+                if (!identity::verify_node_id(peer_id, pk)) {
+                    spdlog::warn("E2-2 REJECT: Claimed NodeID {} does NOT match public key from {}",
+                                 peer_id.to_short_hex(), conn->remote_endpoint_str());
+                    conn->close("NodeID mismatch with public key");
+                    break;
+                }
+
+                // VALIDATION PASSED: Now and only now set peer_id, add contact, send PONG
+                conn->set_peer_id(peer_id);
+                spdlog::info("PING from verified NodeID={}", peer_id.to_short_hex());
+
+                uint16_t peer_port = j.value("listen_port", conn->remote_port());
+                PeerInfo peer{
+                    .node_id = peer_id,
+                    .address = PeerAddress{
+                        .host = conn->remote_ip(),
+                        .port = peer_port
+                    }
+                };
+                add_contact(peer);
+
+                // Send PONG
+                auto pong = Frame::make_pong(frame.request_id);
+                pong.version = static_cast<uint8_t>(config_.transport.protocol_version);
+
+                nlohmann::json resp_j;
+                resp_j["node_id"] = node_id().to_hex();
+                resp_j["public_key"] = nlohmann::json::binary_t(
+                    {keypair_->public_key().begin(), keypair_->public_key().end()});
+                resp_j["listen_port"] = config_.node.listen_port;
+                auto cbor = nlohmann::json::to_cbor(resp_j);
+                pong.payload.assign(cbor.begin(), cbor.end());
+
+                conn->send(pong);
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to parse PING payload from {}: {}", conn->remote_endpoint_str(), e.what());
+                conn->close("Invalid CBOR in PING");
+            }
             break;
         }
 
         case MessageType::PONG: {
-            if (!frame.payload.empty()) {
-                try {
-                    auto j = nlohmann::json::from_cbor(frame.payload);
-                    if (j.contains("node_id")) {
-                        NodeID peer_id;
-                        if (!NodeID::from_hex(j["node_id"].get<std::string>(), peer_id)) {
-                            spdlog::warn("Malformed NodeID from {}", conn->remote_endpoint_str());
-                            break;
-                        }
-
-                        // Validate claimed NodeID against public key (satisfies E2-2)
-                        if (j.contains("public_key")) {
-                            auto pk_bytes = j["public_key"].get<nlohmann::json::binary_t>();
-                            if (pk_bytes.size() == 32) {
-                                std::array<uint8_t, 32> pk;
-                                std::copy(pk_bytes.begin(), pk_bytes.end(), pk.begin());
-                                if (!identity::verify_node_id(peer_id, pk)) {
-                                    spdlog::warn("E2-2 REJECT: Claimed NodeID {} does NOT match public key from {}",
-                                                 peer_id.to_short_hex(), conn->remote_endpoint_str());
-                                    conn->close("NodeID mismatch with public key");
-                                    break;
-                                }
-                            }
-                        }
-
-                        conn->set_peer_id(peer_id);
-                        spdlog::info("PONG from verified NodeID={}", peer_id.to_short_hex());
-
-                        // Update routing table
-                        uint16_t peer_port = j.value("listen_port", conn->remote_port());
-                        PeerInfo peer{
-                            .node_id = peer_id,
-                            .address = PeerAddress{
-                                .host = conn->remote_ip(),
-                                .port = peer_port
-                            }
-                        };
-                        routing_table_->add_or_update(peer);
-                    }
-                } catch (const std::exception& e) {
-                    spdlog::warn("Failed to parse PONG payload: {}", e.what());
+            // E1-6, E2-5: Correlate PONG by request_id. Unsolicited PONGs must be rejected!
+            PendingPing ping_info;
+            bool found_pending = false;
+            {
+                std::lock_guard lock(pending_pings_mutex_);
+                auto it = pending_pings_.find(frame.request_id);
+                if (it != pending_pings_.end()) {
+                    ping_info = it->second;
+                    pending_pings_.erase(it);
+                    found_pending = true;
                 }
+            }
+
+            if (!found_pending) {
+                spdlog::warn("E1-6 REJECT: Unsolicited or mismatched PONG (request_id={}) from {}",
+                             frame.request_id.to_hex().substr(0, 8), conn->remote_endpoint_str());
+                break;
+            }
+
+            // Strict validation of PONG payload
+            if (frame.payload.empty()) {
+                spdlog::warn("Rejected PONG with empty payload from {}", conn->remote_endpoint_str());
+                if (ping_info.callback) ping_info.callback(false);
+                break;
+            }
+
+            try {
+                auto j = nlohmann::json::from_cbor(frame.payload);
+                if (!j.contains("node_id") || !j.contains("public_key")) {
+                    spdlog::warn("Rejected PONG missing identity fields from {}", conn->remote_endpoint_str());
+                    if (ping_info.callback) ping_info.callback(false);
+                    break;
+                }
+
+                NodeID peer_id;
+                if (!NodeID::from_hex(j["node_id"].get<std::string>(), peer_id)) {
+                    spdlog::warn("Malformed NodeID in PONG from {}", conn->remote_endpoint_str());
+                    if (ping_info.callback) ping_info.callback(false);
+                    break;
+                }
+
+                auto pk_bytes = j["public_key"].get<nlohmann::json::binary_t>();
+                if (pk_bytes.size() != 32) {
+                    spdlog::warn("Invalid public key size in PONG from {}", conn->remote_endpoint_str());
+                    if (ping_info.callback) ping_info.callback(false);
+                    break;
+                }
+
+                std::array<uint8_t, 32> pk;
+                std::copy(pk_bytes.begin(), pk_bytes.end(), pk.begin());
+                if (!identity::verify_node_id(peer_id, pk)) {
+                    spdlog::warn("E2-2 REJECT: Claimed NodeID {} does NOT match public key in PONG from {}",
+                                 peer_id.to_short_hex(), conn->remote_endpoint_str());
+                    conn->close("NodeID mismatch with public key");
+                    if (ping_info.callback) ping_info.callback(false);
+                    break;
+                }
+
+                // Check expected NodeID if this PING targeted a specific node (E1-6)
+                if (ping_info.expected_peer_id && peer_id != *ping_info.expected_peer_id) {
+                    spdlog::warn("E1-6 REJECT: Responder NodeID {} does NOT match expected NodeID {}",
+                                 peer_id.to_short_hex(), ping_info.expected_peer_id->to_short_hex());
+                    conn->close("Unexpected responder NodeID");
+                    if (ping_info.callback) ping_info.callback(false);
+                    break;
+                }
+
+                // VALIDATION PASSED
+                conn->set_peer_id(peer_id);
+                spdlog::info("PONG from verified NodeID={}", peer_id.to_short_hex());
+
+                uint16_t peer_port = j.value("listen_port", conn->remote_port());
+                PeerInfo peer{
+                    .node_id = peer_id,
+                    .address = PeerAddress{
+                        .host = conn->remote_ip(),
+                        .port = peer_port
+                    }
+                };
+                add_contact(peer);
+
+                if (ping_info.callback) {
+                    ping_info.callback(true);
+                }
+            } catch (const std::exception& e) {
+                spdlog::warn("Failed to parse PONG payload from {}: {}", conn->remote_endpoint_str(), e.what());
+                if (ping_info.callback) ping_info.callback(false);
             }
             break;
         }
@@ -339,7 +445,7 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                 spdlog::debug("FIND_NODE_REQUEST for target {} from {}",
                               req.target.to_short_hex(),
                               req.sender.node_id.to_short_hex());
-                routing_table_->add_or_update(req.sender);
+                add_contact(req.sender);
 
                 auto closest = routing_table_->find_closest(req.target, config_.dht.k_bucket_size);
 
@@ -363,7 +469,7 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
                               conn->remote_endpoint_str(),
                               resp.closest_nodes.size());
                 for (const auto& peer : resp.closest_nodes) {
-                    routing_table_->add_or_update(peer);
+                    add_contact(peer);
                 }
             } else {
                 spdlog::warn("Malformed FIND_NODE_RESPONSE from {}", conn->remote_endpoint_str());
@@ -525,7 +631,7 @@ void Node::async_lookup(const NodeID& target,
                     if (dht::deserialize_find_node_response(resp_frame.payload, resp)) {
                         session->on_response(peer_id, resp.closest_nodes);
                         for (const auto& contact : resp.closest_nodes) {
-                            routing_table_->add_or_update(contact);
+                            add_contact(contact);
                         }
                     } else {
                         session->on_failure(peer_id);
@@ -557,5 +663,50 @@ std::string Node::export_routing_table_json() const {
     if (!routing_table_) return "{}";
     return routing_table_->to_json();
 }
+
+void Node::add_contact(const PeerInfo& peer) {
+    if (!routing_table_) return;
+    bool added = routing_table_->add_or_update(peer);
+    if (!added) {
+        // Bucket is full! (E2-4)
+        // Probe the least recently seen contact in this bucket
+        auto lru = routing_table_->least_recently_seen_in_bucket(peer.node_id);
+        if (lru && lru->node_id != peer.node_id) {
+            probe_lru_contact(*lru);
+        }
+    }
+}
+
+void Node::probe_lru_contact(const PeerInfo& lru) {
+    spdlog::debug("Probing LRU contact {} in full bucket", lru.node_id.to_short_hex());
+    auto conn = get_connection_to(lru.node_id);
+    if (!conn) {
+        conn = transport::TcpConnection::connect(
+            io_, lru.address.host, lru.address.port,
+            std::chrono::milliseconds(config_.transport.connect_timeout_ms));
+        if (conn) {
+            conn->set_peer_id(lru.node_id);
+            register_connection(conn);
+        }
+    }
+
+    if (!conn) {
+        // Unreachable contact -> evict immediately to promote replacement candidate (E2-4)
+        spdlog::info("LRU contact {} unreachable, evicting from bucket", lru.node_id.to_short_hex());
+        routing_table_->remove(lru.node_id);
+        return;
+    }
+
+    send_ping(conn, lru.node_id, [this, lru_id = lru.node_id](bool success) {
+        if (success) {
+            spdlog::debug("LRU contact {} responded to probe, keeping as MRU", lru_id.to_short_hex());
+            routing_table_->touch(lru_id);
+        } else {
+            spdlog::info("LRU contact {} failed probe, evicting from bucket", lru_id.to_short_hex());
+            routing_table_->remove(lru_id);
+        }
+    });
+}
+
 
 } // namespace p2p

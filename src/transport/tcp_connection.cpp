@@ -5,21 +5,54 @@
 
 #include <spdlog/spdlog.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <poll.h>
+#include <sys/socket.h>
+#endif
+
 namespace p2p::transport {
 
 // ─── Construction ───────────────────────────────────────────────────
 
 TcpConnection::TcpConnection(asio::ip::tcp::socket socket)
     : socket_(std::move(socket))
+    , io_timer_(socket_.get_executor())
 {
 }
 
 TcpConnection::~TcpConnection() {
+    io_timer_.cancel();
+    asio::error_code ec;
     if (socket_.is_open()) {
-        asio::error_code ec;
         socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ec);
         socket_.close(ec);
     }
+}
+
+// ─── Configuration & Watchdog ────────────────────────────────────────
+
+void TcpConnection::configure(uint8_t version, uint32_t max_payload, std::chrono::milliseconds io_timeout) {
+    parser_.set_expected_version(version);
+    parser_.set_max_payload(max_payload);
+    io_timeout_ = io_timeout;
+    reset_io_timer();
+}
+
+void TcpConnection::reset_io_timer() {
+    if (io_timeout_.count() <= 0 || !socket_.is_open()) return;
+    io_timer_.cancel();
+    io_timer_.expires_after(io_timeout_);
+    auto self = shared_from_this();
+    io_timer_.async_wait([this, self](const asio::error_code& ec) {
+        if (!ec && socket_.is_open()) {
+            spdlog::debug("Connection {} closed due to inactivity timeout ({} ms)",
+                          remote_endpoint_str(), io_timeout_.count());
+            close("I/O inactivity timeout");
+        }
+    });
 }
 
 // ─── Connect ────────────────────────────────────────────────────────
@@ -40,16 +73,63 @@ TcpConnection::Ptr TcpConnection::connect(
     }
 
     asio::ip::tcp::socket socket(io);
+    bool connected = false;
 
-    // Synchronous connect with error handling
-    asio::connect(socket, endpoints, ec);
+    // Connect with timeout to the resolved endpoints (E1-3)
+    for (const auto& entry : endpoints) {
+        ec.clear();
+        socket.open(entry.endpoint().protocol(), ec);
+        if (ec) continue;
 
-    if (ec) {
-        spdlog::error("Failed to connect to {}:{} — {}", host, port, ec.message());
+        socket.non_blocking(true, ec);
+        socket.connect(entry.endpoint(), ec);
+
+        if (ec == asio::error::in_progress || ec == asio::error::would_block) {
+#ifdef _WIN32
+            WSAPOLLFD fdArray;
+            fdArray.fd = socket.native_handle();
+            fdArray.events = POLLOUT;
+            fdArray.revents = 0;
+            int ret = WSAPoll(&fdArray, 1, static_cast<int>(timeout.count()));
+#else
+            struct pollfd pfd;
+            pfd.fd = socket.native_handle();
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            int ret = poll(&pfd, 1, static_cast<int>(timeout.count()));
+#endif
+            if (ret > 0) {
+                int so_error = 0;
+                socklen_t len = sizeof(so_error);
+                getsockopt(socket.native_handle(), SOL_SOCKET, SO_ERROR,
+                           reinterpret_cast<char*>(&so_error), &len);
+                if (so_error == 0) {
+                    connected = true;
+                    ec.clear();
+                    break;
+                } else {
+                    ec = asio::error_code(so_error, asio::error::get_system_category());
+                }
+            } else if (ret == 0) {
+                ec = asio::error::timed_out;
+            } else {
+                ec = asio::error::try_again;
+            }
+        } else if (!ec) {
+            connected = true;
+            break;
+        }
+
+        socket.close();
+    }
+
+    if (!connected) {
+        spdlog::error("Failed to connect to {}:{} — {}", host, port,
+                      ec ? ec.message() : "connection timed out");
         return nullptr;
     }
 
-    // Disable Nagle's algorithm for lower latency
+    socket.non_blocking(false, ec);
     socket.set_option(asio::ip::tcp::no_delay(true), ec);
 
     spdlog::debug("Connected to {}:{}", host, port);
@@ -108,6 +188,8 @@ void TcpConnection::do_read() {
                 return;
             }
 
+            reset_io_timer();
+
             // Feed raw bytes into the frame parser
             parser_.feed(read_buf_.data(), bytes_read);
 
@@ -140,12 +222,14 @@ void TcpConnection::process_incoming() {
                 // Need more data, stop processing
                 break;
             }
-            // Protocol error — log and continue
+            // Protocol error — log and handle
             spdlog::warn("Frame error from {}: {}",
                          remote_endpoint_str(),
                          frame_error_name(err));
-            // For serious errors (bad version, oversized), we could
-            // close the connection. For now, skip and try next frame.
+            if (err == FrameError::UnsupportedVersion || err == FrameError::PayloadTooLarge) {
+                close(std::string("Protocol error: ") + std::string(frame_error_name(err)));
+                break;
+            }
         }
     }
 }
@@ -157,6 +241,8 @@ void TcpConnection::send(const Frame& frame) {
         spdlog::warn("Attempted to send on closed connection");
         return;
     }
+
+    reset_io_timer();
 
     auto data = frame.serialize();
     spdlog::trace("Sending frame: type={}, payload={} bytes, to={}",

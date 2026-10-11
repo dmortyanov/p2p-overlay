@@ -1,0 +1,26 @@
+[2026-10-11 13:18:26.010] [info] [1] Loaded config from config/default.toml
+[2026-10-11 13:18:26.010] [info] [1] No identity found in ./node_state, generating new keypair
+[2026-10-11 13:18:26.010] [info] [1] Generated new Ed25519 keypair, NodeID=baccc104
+[2026-10-11 13:18:26.012] [debug] [1] Saved identity to ./node_state
+[2026-10-11 13:18:26.012] [info] [1] в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+[2026-10-11 13:18:26.012] [info] [1]   P2P Overlay Node starting
+[2026-10-11 13:18:26.012] [info] [1]   NodeID:  baccc1049fba0e0f7aea4c096b14df1f795d3d59b6ddb6c4828248dc5346a989
+[2026-10-11 13:18:26.012] [info] [1]   Listen:  0.0.0.0:9010
+[2026-10-11 13:18:26.012] [info] [1]   K:       4
+[2026-10-11 13:18:26.012] [info] [1]   Alpha:   3
+[2026-10-11 13:18:26.012] [info] [1]   R:       3
+[2026-10-11 13:18:26.012] [info] [1] в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+[2026-10-11 13:18:26.012] [info] [1] TCP listener bound to 0.0.0.0:9010
+[2026-10-11 13:18:26.013] [info] [1] Node baccc104 entering event loop
+[2026-10-11 13:18:28.064] [debug] [1] Accepted connection from 172.20.0.3:39236
+[2026-10-11 13:18:28.064] [info] [1] Accepted connection from 172.20.0.3:39236
+[2026-10-11 13:18:28.065] [debug] [1] Frame from 172.20.0.3:39236: type=PING, payload=135 bytes
+[2026-10-11 13:18:28.065] [info] [1] PING from verified NodeID=ef4439f3
+[2026-10-11 13:18:28.365] [debug] [1] Frame from 172.20.0.3:39236: type=FIND_NODE_REQUEST, payload=177 bytes
+[2026-10-11 13:18:28.365] [debug] [1] FIND_NODE_REQUEST for target ef4439f3 from ef4439f3
+[2026-10-11 13:18:37.831] [info] [1] Received signal 15, shutting down...
+[2026-10-11 13:18:37.831] [info] [1] Node baccc104 shutting down...
+[2026-10-11 13:18:37.831] [debug] [1] Closing connection to 172.20.0.3:39236 вЂ” Node shutting down
+[2026-10-11 13:18:37.831] [info] [1] Disconnected from ef4439f3: Node shutting down
+[2026-10-11 13:18:37.831] [info] [1] Node baccc104 stopped
+[2026-10-11 13:18:37.831] [info] [1] Node shut down cleanly

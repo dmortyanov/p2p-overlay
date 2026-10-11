@@ -37,10 +37,14 @@ desktop.ini
 # Node state (generated at runtime)
 node_state/
 
-# Experiment results (keep .gitkeep, ignore bulk data)
-results/*.csv
-results/*.json
+# Experiment results
+results/*
 !results/.gitkeep
+!results/two_nodes_node1.log
+!results/two_nodes_node2.log
+!results/pilot_lookups.csv
+!results/star/
+!results/ring/
 pcap/*.pcap
 !pcap/.gitkeep
 

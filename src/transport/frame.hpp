@@ -109,6 +109,11 @@ struct Frame {
 ///   }
 class FrameParser {
 public:
+    explicit FrameParser(uint8_t expected_version = PROTOCOL_VERSION,
+                         uint32_t max_payload = MAX_FRAME_PAYLOAD)
+        : expected_version_(expected_version)
+        , max_payload_(max_payload) {}
+
     /// Feed raw bytes from TCP into the parser.
     void feed(const uint8_t* data, std::size_t len);
     void feed(const Bytes& data) { feed(data.data(), data.size()); }
@@ -127,8 +132,18 @@ public:
     /// Reset parser state, discarding buffered data.
     void reset() { buffer_.clear(); }
 
+    /// Configure protocol version dynamically (E1-2).
+    void set_expected_version(uint8_t version) { expected_version_ = version; }
+    [[nodiscard]] uint8_t expected_version() const { return expected_version_; }
+
+    /// Configure maximum frame payload dynamically (E1-2).
+    void set_max_payload(uint32_t max_payload) { max_payload_ = max_payload; }
+    [[nodiscard]] uint32_t max_payload() const { return max_payload_; }
+
 private:
-    Bytes buffer_;
+    uint8_t  expected_version_{PROTOCOL_VERSION};
+    uint32_t max_payload_{MAX_FRAME_PAYLOAD};
+    Bytes    buffer_;
 };
 
 } // namespace p2p::transport

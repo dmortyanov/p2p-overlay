@@ -2,8 +2,12 @@
 /// @brief Automated tests for E2-4: LRU replacement scenarios (live vs dead contact).
 
 #include "dht/k_bucket.hpp"
+#include "node.hpp"
+#include "config/config.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <thread>
+#include <filesystem>
 
 using namespace p2p;
 using namespace p2p::dht;
@@ -116,4 +120,61 @@ TEST_CASE("E2-4 Scenario 2: Unresponsive LRU contact is replaced by new contact"
     REQUIRE(peers[1].node_id == c3.node_id);
     REQUIRE(peers[2].node_id == c4.node_id);
     REQUIRE(peers[3].node_id == c_new.node_id);
+}
+
+TEST_CASE("E2-4 Scenario 3: Node network LRU eviction of dead contact", "[dht][lru][node]") {
+    std::filesystem::remove_all("./test_lru_node_dir");
+    config::Config cfg;
+    cfg.node.listen_address = "127.0.0.1";
+    cfg.node.listen_port = 23001;
+    cfg.node.data_dir = "./test_lru_node_dir";
+    cfg.dht.k_bucket_size = 4;
+    cfg.transport.connect_timeout_ms = 100;
+    cfg.transport.io_timeout_ms = 200;
+
+    Node node(cfg);
+    node.start();
+    std::thread t([&]() { node.run(); });
+
+    // Generate peers that land into the same bucket (flips most significant bit)
+    auto local_id = node.node_id();
+    auto make_in_bucket = [&](uint8_t suffix) {
+        NodeID id = local_id;
+        id.data[0] ^= 0x80;
+        id.data[31] = suffix;
+        return PeerInfo{
+            .node_id = id,
+            .address = PeerAddress{.host = "127.0.0.1", .port = static_cast<uint16_t>(24000 + suffix)}
+        };
+    };
+
+    auto p1 = make_in_bucket(1);
+    auto p2 = make_in_bucket(2);
+    auto p3 = make_in_bucket(3);
+    auto p4 = make_in_bucket(4);
+
+    node.add_contact(p1);
+    node.add_contact(p2);
+    node.add_contact(p3);
+    node.add_contact(p4);
+
+    REQUIRE(node.routing_table().total_contacts() == 4);
+
+    // Now add 5th peer p5 into the full bucket
+    auto p5 = make_in_bucket(5);
+    node.add_contact(p5);
+
+    // Give time for network probe to p1 (which fails because port 24001 is closed)
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    // p1 should be evicted and p5 promoted into the routing table!
+    auto found_p1 = node.routing_table().find(p1.node_id);
+    auto found_p5 = node.routing_table().find(p5.node_id);
+
+    CHECK_FALSE(found_p1.has_value());
+    CHECK(found_p5.has_value());
+
+    node.stop();
+    if (t.joinable()) t.join();
+    std::filesystem::remove_all("./test_lru_node_dir");
 }

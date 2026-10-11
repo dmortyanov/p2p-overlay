@@ -129,6 +129,15 @@ void RoutingTable::mark_failed(const NodeID& id) {
     buckets_[idx].mark_failed(id);
 }
 
+void RoutingTable::touch(const NodeID& id) {
+    int idx = get_bucket_index(id);
+    if (idx < 0 || static_cast<std::size_t>(idx) >= NUM_BUCKETS) {
+        return;
+    }
+    std::lock_guard lock(mutex_);
+    buckets_[idx].touch(id);
+}
+
 std::string RoutingTable::to_json() const {
     std::lock_guard lock(mutex_);
     nlohmann::json root;

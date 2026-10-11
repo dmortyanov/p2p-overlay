@@ -24,6 +24,10 @@
 
 #include <csignal>
 #include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <thread>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -61,8 +65,11 @@ std::vector<std::string> parse_peers(const std::string& peers_str) {
 }
 
 void setup_logging(const std::string& level) {
-    auto console = spdlog::stdout_color_mt("console");
-    spdlog::set_default_logger(console);
+    auto console = spdlog::get("console");
+    if (!console) {
+        console = spdlog::stdout_color_mt("console");
+        spdlog::set_default_logger(console);
+    }
 
     if      (level == "trace")    spdlog::set_level(spdlog::level::trace);
     else if (level == "debug")    spdlog::set_level(spdlog::level::debug);
@@ -85,6 +92,8 @@ int main(int argc, char* argv[]) {
     std::string data_dir;
     std::string bootstrap_str;
     std::string log_level      = "info";
+    std::string dump_routing_path;
+    int duration_sec           = 0;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -100,6 +109,10 @@ int main(int argc, char* argv[]) {
             bootstrap_str = argv[++i];
         } else if ((arg == "--log-level" || arg == "-l") && i + 1 < argc) {
             log_level = argv[++i];
+        } else if (arg == "--dump-routing" && i + 1 < argc) {
+            dump_routing_path = argv[++i];
+        } else if (arg == "--duration" && i + 1 < argc) {
+            duration_sec = std::stoi(argv[++i]);
         } else if (arg == "--help" || arg == "-h") {
             std::cout << "P2P Overlay Node v0.1.0\n"
                       << "Usage: p2p_node [options]\n"
@@ -109,6 +122,8 @@ int main(int argc, char* argv[]) {
                       << "  --data-dir, -d <dir>     Data directory\n"
                       << "  --bootstrap, -b <peers>  Bootstrap peers (host:port,...)\n"
                       << "  --log-level, -l <level>  Log level (trace/debug/info/warn/error)\n"
+                      << "  --dump-routing <path>    Dump routing table JSON to path on exit\n"
+                      << "  --duration <seconds>     Auto-terminate after duration\n"
                       << "  --help, -h               Show this help\n";
             return 0;
         }
@@ -145,7 +160,43 @@ int main(int argc, char* argv[]) {
         std::signal(SIGTERM, signal_handler);
 
         node.start();
+
+        std::thread killer;
+        if (duration_sec > 0) {
+            killer = std::thread([&node, duration_sec]() {
+                std::this_thread::sleep_for(std::chrono::seconds(duration_sec));
+                spdlog::info("Duration timer expired ({} s), stopping node...", duration_sec);
+                node.stop();
+            });
+        }
+
         node.run();
+
+        if (killer.joinable()) {
+            killer.join();
+        }
+
+        if (!dump_routing_path.empty()) {
+            if (dump_routing_path == "-") {
+                std::cout << "\n--- ROUTING_TABLE_JSON_START ---\n"
+                          << node.export_routing_table_json()
+                          << "\n--- ROUTING_TABLE_JSON_END ---\n" << std::flush;
+            } else {
+                try {
+                    auto p = std::filesystem::path(dump_routing_path);
+                    if (p.has_parent_path()) {
+                        std::filesystem::create_directories(p.parent_path());
+                    }
+                    std::ofstream f(dump_routing_path);
+                    if (f.is_open()) {
+                        f << node.export_routing_table_json();
+                        spdlog::info("Exported routing table to {}", dump_routing_path);
+                    }
+                } catch (const std::exception& e) {
+                    spdlog::error("Failed to dump routing table to {}: {}", dump_routing_path, e.what());
+                }
+            }
+        }
 
         g_node = nullptr;
         spdlog::info("Node shut down cleanly");

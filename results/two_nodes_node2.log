@@ -1,0 +1,29 @@
+[2026-10-11 13:18:28.050] [info] [1] Loaded config from config/default.toml
+[2026-10-11 13:18:28.051] [info] [1] No identity found in ./node_state, generating new keypair
+[2026-10-11 13:18:28.051] [info] [1] Generated new Ed25519 keypair, NodeID=ef4439f3
+[2026-10-11 13:18:28.053] [debug] [1] Saved identity to ./node_state
+[2026-10-11 13:18:28.054] [info] [1] в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+[2026-10-11 13:18:28.054] [info] [1]   P2P Overlay Node starting
+[2026-10-11 13:18:28.054] [info] [1]   NodeID:  ef4439f30415513f15db915ec7a46bc69c7ced562295eb6f4edd9971198a291e
+[2026-10-11 13:18:28.054] [info] [1]   Listen:  0.0.0.0:9011
+[2026-10-11 13:18:28.054] [info] [1]   K:       4
+[2026-10-11 13:18:28.054] [info] [1]   Alpha:   3
+[2026-10-11 13:18:28.054] [info] [1]   R:       3
+[2026-10-11 13:18:28.054] [info] [1] в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+[2026-10-11 13:18:28.054] [info] [1] TCP listener bound to 0.0.0.0:9011
+[2026-10-11 13:18:28.054] [info] [1] Connecting to peer p2p_test_node1:9010...
+[2026-10-11 13:18:28.064] [debug] [1] Connected to p2p_test_node1:9010
+[2026-10-11 13:18:28.064] [debug] [1] Sent PING to 172.20.0.2:9010 (rid=4ad01925)
+[2026-10-11 13:18:28.064] [info] [1] Node ef4439f3 entering event loop
+[2026-10-11 13:18:28.065] [debug] [1] Frame from 172.20.0.2:9010: type=PONG, payload=135 bytes
+[2026-10-11 13:18:28.065] [info] [1] PONG from verified NodeID=baccc104
+[2026-10-11 13:18:28.365] [info] [1] Triggering bootstrap self-lookup for NodeID ef4439f3
+[2026-10-11 13:18:28.365] [debug] [1] Frame from 172.20.0.2:9010: type=FIND_NODE_RESPONSE, payload=104 bytes
+[2026-10-11 13:18:28.365] [debug] [1] FIND_NODE_RESPONSE from 172.20.0.2:9010 with 1 contacts
+[2026-10-11 13:18:28.365] [info] [1] Bootstrap self-lookup finished: 1 peers discovered (RPCs: 1, iterations: 1)
+[2026-10-11 13:18:37.831] [info] [1] Received signal 15, shutting down...
+[2026-10-11 13:18:37.831] [info] [1] Node ef4439f3 shutting down...
+[2026-10-11 13:18:37.831] [debug] [1] Closing connection to 172.20.0.2:9010 вЂ” Node shutting down
+[2026-10-11 13:18:37.831] [info] [1] Disconnected from baccc104: Node shutting down
+[2026-10-11 13:18:37.831] [info] [1] Node ef4439f3 stopped
+[2026-10-11 13:18:37.831] [info] [1] Node shut down cleanly

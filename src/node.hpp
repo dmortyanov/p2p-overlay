@@ -80,6 +80,12 @@ public:
     /// Export routing table state to JSON string (satisfies E2-8 and proof of non-degeneracy).
     [[nodiscard]] std::string export_routing_table_json() const;
 
+    /// Add or update a contact in routing table, triggering network probe of LRU on overflow (E2-4).
+    void add_contact(const PeerInfo& peer);
+
+    /// Probe the least recently seen contact in a full bucket (E2-4).
+    void probe_lru_contact(const PeerInfo& lru);
+
 private:
     /// Handle a new incoming connection.
     void on_accept(transport::TcpConnection::Ptr conn);
@@ -109,6 +115,20 @@ private:
     // In-flight RPC request handlers (for request_id correlation)
     mutable std::mutex             pending_mutex_;
     std::unordered_map<RequestID, std::function<void(const transport::Frame&)>> pending_requests_;
+
+    // In-flight PING requests (E1-6, E2-5)
+    struct PendingPing {
+        RequestID rid;
+        std::optional<NodeID> expected_peer_id;
+        std::function<void(bool)> callback;
+    };
+    mutable std::mutex             pending_pings_mutex_;
+    std::unordered_map<RequestID, PendingPing> pending_pings_;
+
+    /// Send a PING to a connection, correlating request_id and validating response (E1-6, E2-5).
+    void send_ping(transport::TcpConnection::Ptr conn,
+                   std::optional<NodeID> expected_peer_id = std::nullopt,
+                   std::function<void(bool success)> on_result = nullptr);
 };
 
 } // namespace p2p

@@ -136,3 +136,75 @@ TEST_CASE("E2-7 Integration: 5-node cluster with seed termination", "[integratio
         clean_dir("./test_cluster_node_" + std::to_string(i));
     }
 }
+
+TEST_CASE("E2-6 Integration: Multi-hop iterative lookup with trace logging", "[integration][dht][lookup]") {
+    clean_dir("./test_lookup_node_a");
+    clean_dir("./test_lookup_node_b");
+    clean_dir("./test_lookup_node_c");
+
+    // Topology:
+    // Node A (21030) knows Node B (21031)
+    // Node B (21031) knows Node C (21032)
+    // Node A does NOT know Node C!
+    auto cfg_c = make_test_config(21032, "./test_lookup_node_c");
+    auto cfg_b = make_test_config(21031, "./test_lookup_node_b", {"127.0.0.1:21032"});
+    auto cfg_a = make_test_config(21030, "./test_lookup_node_a");
+
+    Node node_c(cfg_c);
+    Node node_b(cfg_b);
+    Node node_a(cfg_a);
+
+    node_c.start();
+    node_b.start();
+    node_a.start();
+
+    std::thread t_c([&]() { node_c.run(); });
+    std::thread t_b([&]() { node_b.run(); });
+    std::thread t_a([&]() { node_a.run(); });
+
+    // Allow time for Node B to bootstrap with Node C
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+    // Connect Node A directly to Node B
+    node_a.connect_to_peer("127.0.0.1", 21031);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    // Confirm initial state: Node A does NOT know Node C in routing table
+    CHECK_FALSE(node_a.routing_table().find(node_c.node_id()).has_value());
+
+    // Node A executes iterative lookup for Node C (target unknown to A beforehand)
+    std::atomic<bool> lookup_done{false};
+    std::vector<PeerInfo> discovered;
+    dht::LookupMetrics metrics{};
+
+    node_a.async_lookup(node_c.node_id(), [&](const std::vector<PeerInfo>& closest, const dht::LookupMetrics& m) {
+        discovered = closest;
+        metrics = m;
+        lookup_done = true;
+    });
+
+    // Wait for lookup to converge over the network
+    for (int i = 0; i < 50 && !lookup_done; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    REQUIRE(lookup_done);
+    REQUIRE(!discovered.empty());
+    // Node C was discovered through Node B!
+    CHECK(discovered[0].node_id == node_c.node_id());
+    CHECK(metrics.iterations >= 1);
+    CHECK(metrics.total_rpcs >= 1);
+
+    node_a.stop();
+    node_b.stop();
+    node_c.stop();
+
+    if (t_a.joinable()) t_a.join();
+    if (t_b.joinable()) t_b.join();
+    if (t_c.joinable()) t_c.join();
+
+    clean_dir("./test_lookup_node_a");
+    clean_dir("./test_lookup_node_b");
+    clean_dir("./test_lookup_node_c");
+}
+

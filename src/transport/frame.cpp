@@ -109,15 +109,15 @@ std::expected<Frame, FrameError> FrameParser::next_frame() {
 
     // ── Validation (BEFORE allocating payload buffer) ─────────────
 
-    // Check version
-    if (version != PROTOCOL_VERSION) {
+    // Check version (E1-2 configurable)
+    if (version != expected_version_) {
         // Discard the header bytes so we don't re-parse
         buffer_.erase(buffer_.begin(), buffer_.begin() + FRAME_HEADER_SIZE);
         return std::unexpected(FrameError::UnsupportedVersion);
     }
 
-    // Check payload size BEFORE allocating
-    if (payload_len > MAX_FRAME_PAYLOAD) {
+    // Check payload size BEFORE allocating (E1-2 configurable)
+    if (payload_len > max_payload_) {
         buffer_.erase(buffer_.begin(), buffer_.begin() + FRAME_HEADER_SIZE);
         return std::unexpected(FrameError::PayloadTooLarge);
     }
