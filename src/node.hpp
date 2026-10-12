@@ -15,6 +15,8 @@
 
 #include "config/config.hpp"
 #include "dht/lookup_engine.hpp"
+#include "dht/node_record.hpp"
+#include "dht/record_store.hpp"
 #include "dht/routing_table.hpp"
 #include "identity/keypair.hpp"
 #include "transport/tcp_connection.hpp"
@@ -64,6 +66,10 @@ public:
     [[nodiscard]] const dht::RoutingTable& routing_table() const { return *routing_table_; }
     [[nodiscard]] dht::RoutingTable& routing_table() { return *routing_table_; }
 
+    /// Access record store (Stage 3 DHT storage).
+    [[nodiscard]] const dht::RecordStore& record_store() const { return *record_store_; }
+    [[nodiscard]] dht::RecordStore& record_store() { return *record_store_; }
+
     /// Query closest nodes to target ID from local routing table.
     [[nodiscard]] std::vector<PeerInfo> find_closest_nodes(const NodeID& target,
                                                            std::size_t count = 4) const;
@@ -76,6 +82,28 @@ public:
     /// and invokes callback when the lookup converges to the k closest nodes.
     void async_lookup(const NodeID& target,
                       std::function<void(const std::vector<PeerInfo>&, const dht::LookupMetrics&)> callback);
+
+    /// Create and cryptographically sign a NodeRecord for this node (E3-1).
+    [[nodiscard]] dht::NodeRecord create_self_record(const std::string& alias = "");
+
+    /// Store a record in DHT across R closest nodes (E3-4).
+    /// Quorum: successful if at least 2 confirmations received (or min(2, keepers.size())).
+    void publish_record(const NodeID& key,
+                        const dht::NodeRecord& record,
+                        std::function<void(bool success, std::size_t acks)> callback = nullptr);
+
+    /// Publish this node's own record under its NodeID key (and alias key if set) (E3-4, E3-8).
+    void publish_self_record(const std::string& alias = "",
+                             std::function<void(bool success, std::size_t acks)> callback = nullptr);
+
+    /// Asynchronously find a value in DHT by key (E3-3).
+    /// First checks local store; if not found, queries closest nodes iteratively.
+    void async_find_value(const NodeID& key,
+                          std::function<void(std::optional<dht::NodeRecord>, const dht::LookupMetrics&)> callback);
+
+    /// Asynchronously resolve an alias by looking up SHA256("alias:" || normalize(alias)) (E3-8).
+    void async_resolve_alias(std::string_view alias,
+                             std::function<void(std::optional<dht::NodeRecord>, const dht::LookupMetrics&)> callback);
 
     /// Export routing table state to JSON string (satisfies E2-8 and proof of non-degeneracy).
     [[nodiscard]] std::string export_routing_table_json() const;
@@ -102,18 +130,30 @@ private:
     /// Find an active connection to the given NodeID.
     transport::TcpConnection::Ptr get_connection_to(const NodeID& id);
 
-    config::Config                 config_;
-    asio::io_context               io_;
+    /// Schedule periodic TTL purge (E3-7).
+    void schedule_purge();
+
+    /// Schedule periodic republishing of self-record (E3-7).
+    void schedule_republish();
+
+    config::Config                     config_;
+    asio::io_context                   io_;
     std::unique_ptr<identity::Keypair> keypair_;
     std::unique_ptr<dht::RoutingTable> routing_table_;
-    transport::TcpListener::Ptr    listener_;
+    std::unique_ptr<dht::RecordStore>  record_store_;
+    transport::TcpListener::Ptr        listener_;
+
+    uint64_t                           record_seq_ = 0;
+    std::string                        node_alias_;
+    std::shared_ptr<asio::steady_timer> purge_timer_;
+    std::shared_ptr<asio::steady_timer> republish_timer_;
 
     // Active connections indexed by remote endpoint string
-    mutable std::mutex             conns_mutex_;
+    mutable std::mutex                 conns_mutex_;
     std::vector<transport::TcpConnection::Ptr> connections_;
 
     // In-flight RPC request handlers (for request_id correlation)
-    mutable std::mutex             pending_mutex_;
+    mutable std::mutex                 pending_mutex_;
     std::unordered_map<RequestID, std::function<void(const transport::Frame&)>> pending_requests_;
 
     // In-flight PING requests (E1-6, E2-5)
@@ -122,7 +162,7 @@ private:
         std::optional<NodeID> expected_peer_id;
         std::function<void(bool)> callback;
     };
-    mutable std::mutex             pending_pings_mutex_;
+    mutable std::mutex                 pending_pings_mutex_;
     std::unordered_map<RequestID, PendingPing> pending_pings_;
 
     /// Send a PING to a connection, correlating request_id and validating response (E1-6, E2-5).

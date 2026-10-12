@@ -65,6 +65,10 @@ add_library(p2p_core STATIC
     src/dht/dht_messages.cpp
     src/dht/lookup_engine.hpp
     src/dht/lookup_engine.cpp
+    src/dht/node_record.hpp
+    src/dht/node_record.cpp
+    src/dht/record_store.hpp
+    src/dht/record_store.cpp
 
     # Node
     src/node.hpp
@@ -140,9 +144,25 @@ if(BUILD_TESTS)
     target_link_libraries(test_negative_transport PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_negative_transport COMMAND test_negative_transport)
 
+    # Stage 3: E3-1, E3-2, E3-8 NodeRecord unit & negative tests
+    add_executable(test_node_record tests/unit/test_node_record.cpp)
+    target_link_libraries(test_node_record PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_node_record COMMAND test_node_record)
+
+    # Stage 3: E3-2, E3-6, E3-7 RecordStore local storage, anti-rollback & TTL purge tests
+    add_executable(test_record_store tests/unit/test_record_store.cpp)
+    target_link_libraries(test_record_store PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_record_store COMMAND test_record_store)
+
+    # Stage 3: E3-3, E3-4, E3-5, E3-8 DHT storage cluster integration test (STORE, replication, keeper failure, FIND_VALUE)
+    add_executable(test_dht_storage tests/integration/test_dht_storage.cpp)
+    target_link_libraries(test_dht_storage PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_dht_storage COMMAND test_dht_storage)
+
     set_tests_properties(
         test_frame test_node_id test_k_bucket test_routing_table
         test_lookup test_lru_scenarios test_negative_identity test_negative_transport test_dht_integration
+        test_node_record test_record_store test_dht_storage
         PROPERTIES TIMEOUT 30
     )
 endif()

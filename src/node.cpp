@@ -37,6 +37,9 @@ void Node::start() {
     routing_table_ = std::make_unique<dht::RoutingTable>(
         node_id(), config_.dht.k_bucket_size);
 
+    // Initialize DHT local record store (Stage 3: E3-2, E3-6)
+    record_store_ = std::make_unique<dht::RecordStore>();
+
     spdlog::info("═══════════════════════════════════════════════");
     spdlog::info("  P2P Overlay Node starting");
     spdlog::info("  NodeID:  {}", node_id().to_hex());
@@ -81,12 +84,23 @@ void Node::start() {
             }
         });
     }
+
+    // 6. Schedule periodic record maintenance timers (E3-7)
+    schedule_purge();
+    schedule_republish();
 }
 
 // ─── Stop ───────────────────────────────────────────────────────────
 
 void Node::stop() {
     spdlog::info("Node {} shutting down...", node_id().to_short_hex());
+
+    if (purge_timer_) {
+        purge_timer_->cancel();
+    }
+    if (republish_timer_) {
+        republish_timer_->cancel();
+    }
 
     if (listener_) {
         listener_->stop();
@@ -477,6 +491,86 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
             break;
         }
 
+        case MessageType::STORE_REQUEST: {
+            dht::StoreRequest req;
+            if (dht::deserialize_store_request(frame.payload, req)) {
+                spdlog::info("STORE_REQUEST for key {} from {}",
+                             req.key.to_short_hex(),
+                             req.sender.node_id.to_short_hex());
+                add_contact(req.sender);
+
+                uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+                auto err = record_store_->put(req.key, req.record, now);
+                bool ok = (err == dht::RecordValidationError::None);
+                if (!ok) {
+                    spdlog::warn("STORE_REQUEST rejected: {}", dht::record_validation_error_name(err));
+                }
+
+                dht::StoreResponse resp{
+                    .key = req.key,
+                    .success = ok,
+                    .message = ok ? "Stored successfully" : dht::record_validation_error_name(err)
+                };
+                auto cbor_payload = dht::serialize_store_response(resp);
+
+                Frame resp_frame(MessageType::STORE_RESPONSE, frame.request_id);
+                resp_frame.flags |= FrameFlags::IS_RESPONSE;
+                resp_frame.payload = std::move(cbor_payload);
+                conn->send(resp_frame);
+            } else {
+                spdlog::warn("Malformed STORE_REQUEST from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::STORE_RESPONSE: {
+            spdlog::debug("STORE_RESPONSE received from {}", conn->remote_endpoint_str());
+            break;
+        }
+
+        case MessageType::FIND_VALUE_REQUEST: {
+            dht::FindValueRequest req;
+            if (dht::deserialize_find_value_request(frame.payload, req)) {
+                spdlog::info("FIND_VALUE_REQUEST for key {} from {}",
+                             req.key.to_short_hex(),
+                             req.sender.node_id.to_short_hex());
+                add_contact(req.sender);
+
+                uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count());
+                auto rec_opt = record_store_->get(req.key, now);
+
+                dht::FindValueResponse resp;
+                resp.key = req.key;
+                if (rec_opt.has_value()) {
+                    resp.has_value = true;
+                    resp.record = rec_opt;
+                    spdlog::info("FIND_VALUE_REQUEST for key {}: value found and returned",
+                                 req.key.to_short_hex());
+                } else {
+                    resp.has_value = false;
+                    resp.closest_nodes = routing_table_->find_closest(req.key, config_.dht.k_bucket_size);
+                    spdlog::info("FIND_VALUE_REQUEST for key {}: value not found, returning {} closest nodes",
+                                 req.key.to_short_hex(), resp.closest_nodes.size());
+                }
+
+                auto cbor_payload = dht::serialize_find_value_response(resp);
+                Frame resp_frame(MessageType::FIND_VALUE_RESPONSE, frame.request_id);
+                resp_frame.flags |= FrameFlags::IS_RESPONSE;
+                resp_frame.payload = std::move(cbor_payload);
+                conn->send(resp_frame);
+            } else {
+                spdlog::warn("Malformed FIND_VALUE_REQUEST from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::FIND_VALUE_RESPONSE: {
+            spdlog::debug("FIND_VALUE_RESPONSE received from {}", conn->remote_endpoint_str());
+            break;
+        }
+
         case MessageType::ERROR: {
             if (!frame.payload.empty()) {
                 try {
@@ -708,5 +802,372 @@ void Node::probe_lru_contact(const PeerInfo& lru) {
     });
 }
 
+dht::NodeRecord Node::create_self_record(const std::string& alias) {
+    if (!keypair_) {
+        throw std::runtime_error("Cannot create record before node start (no keypair)");
+    }
+    uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+
+    dht::NodeRecord rec;
+    rec.node_id = node_id();
+    rec.identity_public_key = keypair_->public_key();
+    rec.addresses = {
+        PeerAddress{
+            .host = config_.node.listen_address,
+            .port = config_.node.listen_port
+        }
+    };
+    rec.sequence_number = ++record_seq_;
+    rec.issued_at = now;
+    rec.expires_at = now + config_.dht.record_ttl_sec;
+    rec.alias = alias;
+    rec.sign(*keypair_);
+
+    if (!alias.empty()) {
+        node_alias_ = alias;
+    }
+
+    return rec;
+}
+
+void Node::publish_record(const NodeID& key,
+                          const dht::NodeRecord& record,
+                          std::function<void(bool success, std::size_t acks)> callback) {
+    uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+
+    auto v_err = record.validate(now);
+    if (v_err != dht::RecordValidationError::None) {
+        spdlog::warn("Refusing to publish invalid record: {}",
+                     dht::record_validation_error_name(v_err));
+        if (callback) callback(false, 0);
+        return;
+    }
+
+    // Always store in local store as well
+    (void)record_store_->put(key, record, now);
+
+    // Find R closest nodes across the DHT (E3-4)
+    async_lookup(key, [this, key, record, callback](const std::vector<PeerInfo>& closest,
+                                                    const dht::LookupMetrics&) {
+        std::vector<PeerInfo> remote_keepers;
+        for (const auto& peer : closest) {
+            if (peer.node_id != node_id()) {
+                remote_keepers.push_back(peer);
+            }
+            if (remote_keepers.size() + 1 >= static_cast<std::size_t>(config_.dht.replication)) {
+                break;
+            }
+        }
+
+        std::size_t total_keepers = remote_keepers.size() + 1; // 1 local + remote
+        auto acks = std::make_shared<std::size_t>(1); // local node already stored
+        auto remaining = std::make_shared<std::size_t>(remote_keepers.size());
+        auto finished = std::make_shared<bool>(false);
+        std::size_t required_quorum = std::min<std::size_t>(2, total_keepers);
+
+        spdlog::info("Publishing record for key {} to {} remote keepers (total: {}, quorum: {})",
+                     key.to_short_hex(), remote_keepers.size(), total_keepers, required_quorum);
+
+        if (remote_keepers.empty()) {
+            if (callback) callback(*acks >= required_quorum, *acks);
+            return;
+        }
+
+        for (const auto& target : remote_keepers) {
+            auto conn = get_connection_to(target.node_id);
+            if (!conn) {
+                conn = transport::TcpConnection::connect(
+                    io_, target.address.host, target.address.port,
+                    std::chrono::milliseconds(config_.transport.connect_timeout_ms));
+                if (conn) {
+                    conn->set_peer_id(target.node_id);
+                    register_connection(conn);
+                }
+            }
+
+            if (!conn) {
+                spdlog::warn("Failed to connect to keeper candidate {}", target.node_id.to_short_hex());
+                (*remaining)--;
+                if (*remaining == 0 && !*finished) {
+                    *finished = true;
+                    bool ok = (*acks >= required_quorum);
+                    if (callback) callback(ok, *acks);
+                }
+                continue;
+            }
+
+            dht::StoreRequest req{
+                .key = key,
+                .record = record,
+                .sender = PeerInfo{
+                    .node_id = node_id(),
+                    .address = PeerAddress{
+                        .host = config_.node.listen_address,
+                        .port = config_.node.listen_port
+                    }
+                }
+            };
+
+            auto payload = dht::serialize_store_request(req);
+            auto rid = RequestID::generate();
+            transport::Frame req_frame(transport::MessageType::STORE_REQUEST, rid);
+            req_frame.payload = std::move(payload);
+
+            auto timer = std::make_shared<asio::steady_timer>(
+                io_, std::chrono::milliseconds(config_.transport.io_timeout_ms));
+            auto peer_id = target.node_id;
+
+            {
+                std::lock_guard lock(pending_mutex_);
+                pending_requests_[rid] = [this, timer, acks, remaining, finished, required_quorum, callback, peer_id]
+                    (const transport::Frame& resp_frame) {
+                    timer->cancel();
+                    dht::StoreResponse resp;
+                    if (dht::deserialize_store_response(resp_frame.payload, resp) && resp.success) {
+                        (*acks)++;
+                        spdlog::info("Keeper {} confirmed STORE", peer_id.to_short_hex());
+                    } else {
+                        spdlog::warn("Keeper {} failed STORE: {}", peer_id.to_short_hex(), resp.message);
+                    }
+
+                    (*remaining)--;
+                    if (*remaining == 0 && !*finished) {
+                        *finished = true;
+                        bool ok = (*acks >= required_quorum);
+                        if (callback) callback(ok, *acks);
+                    }
+                };
+            }
+
+            timer->async_wait([this, rid, remaining, finished, acks, required_quorum, callback, peer_id]
+                (const std::error_code& ec) {
+                if (!ec) {
+                    {
+                        std::lock_guard lock(pending_mutex_);
+                        pending_requests_.erase(rid);
+                    }
+                    spdlog::warn("Keeper {} timed out on STORE", peer_id.to_short_hex());
+                    (*remaining)--;
+                    if (*remaining == 0 && !*finished) {
+                        *finished = true;
+                        bool ok = (*acks >= required_quorum);
+                        if (callback) callback(ok, *acks);
+                    }
+                }
+            });
+
+            conn->send(req_frame);
+        }
+    });
+}
+
+void Node::publish_self_record(const std::string& alias,
+                               std::function<void(bool success, std::size_t acks)> callback) {
+    auto rec = create_self_record(alias);
+    auto node_key = dht::node_record_key(rec.node_id);
+
+    publish_record(node_key, rec, [this, alias, rec, callback](bool ok1, std::size_t acks1) {
+        if (!ok1 || alias.empty()) {
+            if (callback) callback(ok1, acks1);
+            return;
+        }
+
+        auto alias_key = dht::alias_record_key(alias);
+        publish_record(alias_key, rec, [callback, acks1](bool ok2, std::size_t acks2) {
+            if (callback) callback(ok2, std::min(acks1, acks2));
+        });
+    });
+}
+
+void Node::async_find_value(const NodeID& key,
+                            std::function<void(std::optional<dht::NodeRecord>, const dht::LookupMetrics&)> callback) {
+    uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+
+    // 1. Check local storage
+    auto local_rec = record_store_->get(key, now);
+    if (local_rec) {
+        spdlog::info("FIND_VALUE for key {} resolved from local storage", key.to_short_hex());
+        if (callback) {
+            dht::LookupMetrics m;
+            m.target = key;
+            m.success = true;
+            callback(local_rec, m);
+        }
+        return;
+    }
+
+    // 2. Perform iterative FIND_VALUE across the network
+    auto session = std::make_shared<dht::LookupSession>(
+        key, node_id(), config_.dht.alpha, config_.dht.k_bucket_size);
+
+    auto initial = routing_table_->find_closest(key, config_.dht.alpha * 2);
+    session->add_candidates(initial);
+
+    auto found_record = std::make_shared<std::optional<dht::NodeRecord>>(std::nullopt);
+    auto finished = std::make_shared<bool>(false);
+
+    auto step_func = std::make_shared<std::function<void()>>();
+    *step_func = [this, session, key, found_record, finished, callback, step_func]() {
+        if (*finished) return;
+
+        if (found_record->has_value()) {
+            *finished = true;
+            session->metrics().success = true;
+            if (callback) {
+                callback(*found_record, session->metrics());
+            }
+            return;
+        }
+
+        if (session->is_complete()) {
+            *finished = true;
+            if (callback) {
+                callback(std::nullopt, session->metrics());
+            }
+            return;
+        }
+
+        auto queries = session->pick_next_queries();
+        if (queries.empty()) {
+            if (session->in_flight_count() == 0 && !*finished) {
+                *finished = true;
+                if (callback) {
+                    callback(std::nullopt, session->metrics());
+                }
+            }
+            return;
+        }
+
+        for (const auto& peer : queries) {
+            auto conn = get_connection_to(peer.node_id);
+            if (!conn) {
+                conn = transport::TcpConnection::connect(
+                    io_, peer.address.host, peer.address.port,
+                    std::chrono::milliseconds(config_.transport.connect_timeout_ms));
+                if (conn) {
+                    conn->set_peer_id(peer.node_id);
+                    register_connection(conn);
+                }
+            }
+
+            if (!conn) {
+                session->on_failure(peer.node_id);
+                (*step_func)();
+                continue;
+            }
+
+            dht::FindValueRequest req{
+                .key = key,
+                .sender = PeerInfo{
+                    .node_id = node_id(),
+                    .address = PeerAddress{
+                        .host = config_.node.listen_address,
+                        .port = config_.node.listen_port
+                    }
+                }
+            };
+
+            auto payload = dht::serialize_find_value_request(req);
+            auto rid = RequestID::generate();
+            transport::Frame req_frame(transport::MessageType::FIND_VALUE_REQUEST, rid);
+            req_frame.payload = std::move(payload);
+
+            auto timer = std::make_shared<asio::steady_timer>(
+                io_, std::chrono::milliseconds(config_.transport.io_timeout_ms));
+            auto peer_id = peer.node_id;
+
+            {
+                std::lock_guard lock(pending_mutex_);
+                pending_requests_[rid] = [this, timer, session, key, peer_id, found_record, finished, callback, step_func]
+                    (const transport::Frame& resp_frame) {
+                    timer->cancel();
+                    dht::FindValueResponse resp;
+                    if (dht::deserialize_find_value_response(resp_frame.payload, resp)) {
+                        if (resp.has_value && resp.record.has_value()) {
+                            uint64_t cur_time = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch()).count());
+                            auto v_err = resp.record->validate(cur_time);
+                            if (v_err == dht::RecordValidationError::None) {
+                                spdlog::info("FIND_VALUE: Valid record returned by keeper {}",
+                                             peer_id.to_short_hex());
+                                (void)record_store_->put(key, *resp.record, cur_time); // Cache locally
+                                *found_record = resp.record;
+                                (*step_func)();
+                                return;
+                            } else {
+                                spdlog::warn("FIND_VALUE: Invalid record from {}: {}",
+                                             peer_id.to_short_hex(),
+                                             dht::record_validation_error_name(v_err));
+                                session->on_failure(peer_id);
+                            }
+                        } else {
+                            // Value not found at this node; process closer contacts returned
+                            session->on_response(peer_id, resp.closest_nodes);
+                            for (const auto& contact : resp.closest_nodes) {
+                                add_contact(contact);
+                            }
+                        }
+                    } else {
+                        session->on_failure(peer_id);
+                    }
+                    (*step_func)();
+                };
+            }
+
+            timer->async_wait([this, session, peer_id, rid, step_func](const std::error_code& ec) {
+                if (!ec) {
+                    {
+                        std::lock_guard lock(pending_mutex_);
+                        pending_requests_.erase(rid);
+                    }
+                    session->on_failure(peer_id);
+                    (*step_func)();
+                }
+            });
+
+            conn->send(req_frame);
+        }
+    };
+
+    (*step_func)();
+}
+
+void Node::async_resolve_alias(std::string_view alias,
+                               std::function<void(std::optional<dht::NodeRecord>, const dht::LookupMetrics&)> callback) {
+    auto key = dht::alias_record_key(alias);
+    async_find_value(key, std::move(callback));
+}
+
+void Node::schedule_purge() {
+    purge_timer_ = std::make_shared<asio::steady_timer>(io_, std::chrono::seconds(15));
+    purge_timer_->async_wait([this](const std::error_code& ec) {
+        if (!ec && record_store_) {
+            uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+            auto purged = record_store_->purge_expired(now);
+            if (purged > 0) {
+                spdlog::info("E3-7: Purged {} expired record(s) from DHT storage", purged);
+            }
+            schedule_purge();
+        }
+    });
+}
+
+void Node::schedule_republish() {
+    int interval = config_.dht.republish_interval_sec > 0 ? config_.dht.republish_interval_sec : 80;
+    republish_timer_ = std::make_shared<asio::steady_timer>(io_, std::chrono::seconds(interval));
+    republish_timer_->async_wait([this](const std::error_code& ec) {
+        if (!ec && keypair_) {
+            spdlog::info("E3-7: Routine republish of self-record");
+            publish_self_record(node_alias_, [](bool ok, std::size_t acks) {
+                spdlog::debug("E3-7: Self-record republish result: success={}, acks={}", ok, acks);
+            });
+            schedule_republish();
+        }
+    });
+}
 
 } // namespace p2p
