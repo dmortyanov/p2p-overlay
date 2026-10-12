@@ -187,6 +187,7 @@ cd build && ctest --output-on-failure
 ```text
 p2p-overlay/
 ├── CMakeLists.txt              # Сценарий сборки CMake (C++20, vcpkg)
+├── PROTOCOL.md                 # Спецификация протокола и пример NodeRecord (E3-1)
 ├── vcpkg.json                  # Манифест внешних зависимостей
 ├── Dockerfile                  # Многоэтапная сборка Docker-образа узла
 ├── docker-compose.yml          # Стенд на 2 узла
@@ -198,20 +199,20 @@ p2p-overlay/
 │   └── ring/                   # Конфигурации узлов 0..4 для схемы Ring
 ├── docs/
 │   ├── architecture.md         # Архитектурная спецификация (7 подсистем, 4 графа)
-│   ├── protocol_spec.md        # Спецификация сетевых кадров и CBOR RPC
+│   ├── protocol_spec.md        # Спецификация сетевых кадров, CBOR RPC и схемы NodeRecord
 │   └── serialization_comparison.md # Сравнение CBOR, MessagePack и JSON
 ├── src/
 │   ├── common/types.hpp        # Базовые типы (NodeID, RequestID, PeerAddress, PeerInfo)
 │   ├── config/                 # Загрузка и валидация конфигурации TOML
 │   ├── identity/               # Ключи Ed25519, вычисление NodeID, подписи
 │   ├── transport/              # TCP-соединения, кадрирование 24B, парсер потока
-│   ├── dht/                    # K-Bucket LRU, RoutingTable 256, LookupSession, RPC
-│   ├── node.hpp / node.cpp     # Фасадный класс узла, сетевой lookup и bootstrap
+│   ├── dht/                    # K-Bucket LRU, RoutingTable 256, LookupSession, NodeRecord, RecordStore, RPC
+│   ├── node.hpp / node.cpp     # Фасадный класс узла, сетевой lookup, STORE/FIND_VALUE, репликация
 │   └── main.cpp                # Точка входа CLI
 └── tests/
-    ├── unit/                   # Модульные тесты (кадры, NodeID, k-bucket, routing, LRU)
-    ├── negative/               # Негативные тесты безопасности (подмена ключей E2-2)
-    └── integration/            # Интеграционные тесты (сетевой обмен, 5-узловой кластер)
+    ├── unit/                   # Модульные тесты (кадры, NodeID, k-bucket, routing, LRU, node_record, record_store)
+    ├── negative/               # Негативные тесты безопасности (подмена ключей E2-2, транспорт E1-6)
+    └── integration/            # Интеграционные тесты (сетевой обмен, 5-узловой кластер, DHT storage E3-5)
 ```
 
 ---
@@ -225,7 +226,8 @@ p2p-overlay/
 | `dht` | `k_bucket_size` | `4` | Максимальная ёмкость одного $k$-bucket'а |
 | `dht` | `alpha` | `3` | Параметр параллелизма итеративного поиска |
 | `dht` | `replication` | `3` | Фактор репликации записей ($R$) |
-| `dht` | `ttl_seconds` | `180` | Время жизни записей в DHT |
+| `dht` | `record_ttl_sec`| `180` | Время жизни записей в DHT |
+| `dht` | `republish_interval_sec` | `80` | Интервал периодического переопубликования ($\le \text{TTL}/2$) |
 | `tunnel` | `min_relay_hops` | `3` | Минимальное число промежуточных ретрансляторов |
 | `tunnel` | `pool_size` | `3` | Количество одновременно поддерживаемых туннелей |
 | `transport` | `max_frame_payload`| `65536` | Максимальный размер полезной нагрузки кадра |
@@ -236,7 +238,7 @@ p2p-overlay/
 
 - [x] **Этап 1. Транспорт**: Асинхронный TCP, 24-байтовый заголовок, FrameParser, идентичность Ed25519, $NodeID = \text{SHA-256}(PubKey)$, TOML.
 - [x] **Этап 2. Поиск узлов**: KBucket LRU ($k=4$), RoutingTable (256 бакетов), итеративный lookup $\alpha=3$, сетевой `async_lookup`, bootstrap `self-lookup`, тесты подмены ключа (`E2-2`), LRU-сценарии (`E2-4`), 5-узловой кластер (`E2-7`), конфигурации `star` и `ring` (`E2-8`).
-- [ ] **Этап 3. Хранение DHT**: RPC `STORE` / `FIND_VALUE`, подписанные `NodeRecord`, кворум репликации $R=3$, псевдонимы `alias:`, защита от rollback.
+- [x] **Этап 3. Хранение DHT**: RPC `STORE` / `FIND_VALUE`, подписанные `NodeRecord`, каноническая сериализация Ed25519, кворум репликации $R=3$ ($Q \ge 2$), нормализованные псевдонимы `alias:`, защита от rollback, автоматическая отказоустойчивость при падении 1 из 3 хранителей (`E3-5`).
 - [ ] **Этап 4. Защищённая сессия**: Собственный протокол AKE (Curve25519, HKDF-SHA256, ChaCha20-Poly1305, транскрипт).
 - [ ] **Этап 5. Туннели**: Цепочки $\ge 3$ хопов, луковичное шифрование, пул туннелей, EMA-профилирование ретрансляторов.
 - [ ] **Этап 6. Прикладные сервисы**: E2E сообщения, блочная передача файлов с SHA-256.

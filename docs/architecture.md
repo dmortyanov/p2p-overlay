@@ -198,9 +198,12 @@ flowchart TB
   - Динамическое обновление списка ближайших кандидатов, исключение дубликатов;
   - Остановка при отсутствии прогресса (новые контакты дальше текущих ближайших $k$).
 - **Хранилище записей (`RecordStore`)**:
-  - Подписанные записи `NodeRecord` и `ContentRecord`;
-  - Репликация на $R = 3$ ближайших узла; подтверждение записи при успехе на $\ge 2$ узлах;
-  - Контроль времени жизни (TTL = 120–300 с) и фоновое переопубликование каждые $\text{TTL}/2$.
+  - Подписанные записи `NodeRecord` и `ContentRecord` с каноническим представлением `canonical_bytes()` для верификации цифровой подписи Ed25519;
+  - Детерминированные ключи поиска: $\text{Key}_{\text{node}} = \text{SHA-256}(\text{"node:"} \parallel NodeID)$ и $\text{Key}_{\text{alias}} = \text{SHA-256}(\text{"alias:"} \parallel \text{normalize}(alias))$;
+  - Репликация на $R = 3$ ближайших узла-хранителя в метрике XOR;
+  - Кворум подтверждения: операция `STORE` признаётся успешной при получении $\ge 2$ подтверждений ($Q \ge 2$);
+  - Защита от отката (Anti-rollback): проверка строгой монотонности `new.sequence_number > old.sequence_number`;
+  - Контроль времени жизни (TTL = 180 с) с автоматической очисткой памяти `purge_expired()` и фоновым переопубликованием владельцем каждые 80 секунд ($\le \text{TTL}/2$).
 
 ### 4.4. Подсистема управления туннелями (Tunnel Management)
 - **Архитектура луковичного канала**:
@@ -299,7 +302,59 @@ sequenceDiagram
 
 ---
 
-### 5.2. Учебный криптографический протокол AKE (Handshake)
+### 5.2. Распределённое хранение и отказоустойчивое разрешение записей в DHT (`STORE`, `FIND_VALUE`, репликация $R=3$, кворум $Q \ge 2$, отказ хранителя `E3-5`)
+
+Диаграмма иллюстрирует процесс публикации подписанной записи `NodeRecord`, репликацию на 3 ближайших хранителя с кворумом, последующий отказ одного из хранителей и успешное извлечение записи через `FIND_VALUE`:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Alice as Владелец (Alice)
+    participant K1 as Хранитель 1 (Ближайший)
+    participant K2 as Хранитель 2
+    participant K3 as Хранитель 3
+    actor Bob as Клиент (Bob)
+
+    Note over Alice: Формирование NodeRecord:<br/>1. seq=1, issued_at, expires_at=now+180s<br/>2. Canonical bytes -> Ed25519_Sign<br/>3. Key = SHA-256("alias:" || "alice-node")
+
+    rect rgb(240, 248, 255)
+        note over Alice, K3: Публикация и репликация на R=3 хранителях (E3-4)
+        par Сохранение на K1
+            Alice->>K1: STORE_REQUEST(Key, NodeRecord)
+            Note over K1: Валидация подписи, TTL,<br/>sequence_number > old
+            K1-->>Alice: STORE_RESPONSE(success=true)
+        and Сохранение на K2
+            Alice->>K2: STORE_REQUEST(Key, NodeRecord)
+            Note over K2: Валидация и сохранение в RecordStore
+            K2-->>Alice: STORE_RESPONSE(success=true)
+        and Сохранение на K3
+            Alice->>K3: STORE_REQUEST(Key, NodeRecord)
+            Note over K3: Валидация и сохранение в RecordStore
+            K3-->>Alice: STORE_RESPONSE(success=true)
+        end
+    end
+
+    Note over Alice: Кворум достигнут (acks=3 >= 2). Публикация успешна!
+
+    rect rgb(255, 240, 240)
+        note over K2: Инъекция отказа (E3-5): Хранитель K2 аварийно остановлен
+        K2--xK2: CRASH / STOP
+    end
+
+    rect rgb(240, 255, 240)
+        note over Bob, K3: Отказоустойчивое извлечение FIND_VALUE клиентом Bob (E3-5)
+        Bob->>Bob: Key = SHA-256("alias:" || "alice-node")
+        Bob->>K2: FIND_VALUE_REQUEST(Key)
+        Note over Bob: Опрос K2 завершается по таймауту (узел недоступен)
+        Bob->>K1: FIND_VALUE_REQUEST(Key)
+        K1-->>Bob: FIND_VALUE_RESPONSE(has_value=true, NodeRecord)
+        Note over Bob: Проверка Ed25519 подписи, TTL и NodeID.<br/>Запись валидна! Адрес Alice получен без ручного вмешательства.
+    end
+```
+
+---
+
+### 5.3. Учебный криптографический протокол AKE (Handshake)
 
 Диаграмма установления защищённой сессии между двумя узлами без использования TLS:
 
@@ -329,7 +384,7 @@ sequenceDiagram
 
 ---
 
-### 5.3. Построение 3-звенного туннеля и луковичная передача
+### 5.4. Построение 3-звенного туннеля и луковичная передача
 
 Диаграмма иллюстрирует процесс создания луковичного маршрута через 3 ретранслятора и доставку зашифрованного сообщения:
 
