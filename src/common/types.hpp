@@ -128,6 +128,27 @@ struct RequestID {
         }
         return result;
     }
+
+    [[nodiscard]] std::string to_short_hex() const {
+        return to_hex().substr(0, 8);
+    }
+
+    [[nodiscard]] static bool from_hex(const std::string& hex, RequestID& out) {
+        if (hex.size() != SIZE * 2) return false;
+        auto hex_nibble = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        for (std::size_t i = 0; i < SIZE; ++i) {
+            auto hi = hex_nibble(hex[i * 2]);
+            auto lo = hex_nibble(hex[i * 2 + 1]);
+            if (hi < 0 || lo < 0) return false;
+            out.data[i] = static_cast<uint8_t>((hi << 4) | lo);
+        }
+        return true;
+    }
 };
 
 /// Network address of a peer.

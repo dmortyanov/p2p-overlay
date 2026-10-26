@@ -207,12 +207,13 @@ p2p-overlay/
 │   ├── identity/               # Ключи Ed25519, вычисление NodeID, подписи
 │   ├── transport/              # TCP-соединения, кадрирование 24B, парсер потока
 │   ├── dht/                    # K-Bucket LRU, RoutingTable 256, LookupSession, NodeRecord, RecordStore, RPC
-│   ├── node.hpp / node.cpp     # Фасадный класс узла, сетевой lookup, STORE/FIND_VALUE, репликация
+│   ├── security/               # X25519, HKDF-SHA256, ChaCha20-Poly1305, ReplayCache, AKE Handshake, SecureSession
+│   ├── node.hpp / node.cpp     # Фасадный класс узла, сетевой lookup, STORE/FIND_VALUE, репликация, AKE
 │   └── main.cpp                # Точка входа CLI
 └── tests/
-    ├── unit/                   # Модульные тесты (кадры, NodeID, k-bucket, routing, LRU, node_record, record_store)
-    ├── negative/               # Негативные тесты безопасности (подмена ключей E2-2, транспорт E1-6)
-    └── integration/            # Интеграционные тесты (сетевой обмен, 5-узловой кластер, DHT storage E3-5)
+    ├── unit/                   # Модульные тесты (кадры, NodeID, k-bucket, routing, LRU, node_record, record_store, AKE)
+    ├── negative/               # Негативные тесты безопасности (подмена ключей E2-2, транспорт E1-6, AKE E4-7)
+    └── integration/            # Интеграционные тесты (сетевой обмен, 5-узловой кластер, DHT storage E3-5, AKE E4-8)
 ```
 
 ---
@@ -239,7 +240,7 @@ p2p-overlay/
 - [x] **Этап 1. Транспорт**: Асинхронный TCP, 24-байтовый заголовок, FrameParser, идентичность Ed25519, $NodeID = \text{SHA-256}(PubKey)$, TOML.
 - [x] **Этап 2. Поиск узлов**: KBucket LRU ($k=4$), RoutingTable (256 бакетов), итеративный lookup $\alpha=3$, сетевой `async_lookup`, bootstrap `self-lookup`, тесты подмены ключа (`E2-2`), LRU-сценарии (`E2-4`), 5-узловой кластер (`E2-7`), конфигурации `star` и `ring` (`E2-8`).
 - [x] **Этап 3. Хранение DHT**: RPC `STORE` / `FIND_VALUE`, подписанные `NodeRecord`, каноническая сериализация Ed25519, кворум репликации $R=3$ ($Q \ge 2$), нормализованные псевдонимы `alias:`, защита от rollback, автоматическая отказоустойчивость при падении 1 из 3 хранителей (`E3-5`).
-- [ ] **Этап 4. Защищённая сессия**: Собственный протокол AKE (Curve25519, HKDF-SHA256, ChaCha20-Poly1305, транскрипт).
+- [x] **Этап 4. Защищённая сессия**: Собственный протокол AKE (Curve25519/X25519, HKDF-SHA256, транскрипты $T_B$/$T_A$), симметричное шифрование кадров ChaCha20-Poly1305 с заголовком AAD, скользящее окно ReplayCache, тесты подмены ключей, replay attacks и bit-flipping (тесты `E4-1`..`E4-8`).
 - [ ] **Этап 5. Туннели**: Цепочки $\ge 3$ хопов, луковичное шифрование, пул туннелей, EMA-профилирование ретрансляторов.
 - [ ] **Этап 6. Прикладные сервисы**: E2E сообщения, блочная передача файлов с SHA-256.
 - [ ] **Этап 7. Масштабирование**: Сеть $N = 21$ узел в Docker Compose, проверка невырожденности.

@@ -20,6 +20,10 @@
 #include <queue>
 #include <string>
 
+namespace p2p::security {
+class SecureSession;
+}
+
 namespace p2p::transport {
 
 /// Callback for received frames.
@@ -99,6 +103,12 @@ public:
     /// Reset I/O watchdog timer.
     void reset_io_timer();
 
+    /// Attach a secure session for end-to-end encrypted frame exchange (Stage 4).
+    void set_secure_session(std::shared_ptr<security::SecureSession> session);
+
+    /// Get the attached secure session (if any).
+    [[nodiscard]] std::shared_ptr<security::SecureSession> secure_session() const;
+
 private:
     explicit TcpConnection(asio::ip::tcp::socket socket);
 
@@ -116,6 +126,7 @@ private:
     FrameHandler          frame_handler_;
     DisconnectHandler     disconnect_handler_;
     std::optional<NodeID> peer_id_;
+    std::shared_ptr<security::SecureSession> secure_session_;
 
     // Read buffer
     static constexpr std::size_t READ_BUF_SIZE = 8192;

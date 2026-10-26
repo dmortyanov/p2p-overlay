@@ -4,6 +4,8 @@
 #include "node.hpp"
 #include "dht/dht_messages.hpp"
 #include "identity/node_id.hpp"
+#include "security/secure_session.hpp"
+#include "security/ake_messages.hpp"
 
 #include <sodium.h>
 #include <spdlog/spdlog.h>
@@ -568,6 +570,56 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
 
         case MessageType::FIND_VALUE_RESPONSE: {
             spdlog::debug("FIND_VALUE_RESPONSE received from {}", conn->remote_endpoint_str());
+            break;
+        }
+
+        case MessageType::HANDSHAKE_INIT: {
+            security::HandshakeInit init;
+            if (security::deserialize_handshake_init(frame.payload, init)) {
+                spdlog::info("Received HANDSHAKE_INIT from claimed NodeID={}", init.node_id.to_short_hex());
+                auto session = std::make_shared<security::SecureSession>();
+                auto resp = session->process_handshake_init(init, *keypair_);
+                if (resp) {
+                    conn->set_secure_session(session);
+                    auto resp_payload = security::serialize_handshake_response(*resp);
+                    Frame resp_frame(MessageType::HANDSHAKE_RESPONSE, frame.request_id);
+                    resp_frame.flags |= FrameFlags::IS_RESPONSE;
+                    resp_frame.payload = std::move(resp_payload);
+                    conn->send(resp_frame);
+                    spdlog::info("Sent HANDSHAKE_RESPONSE for session {}", resp->session_id.to_short_hex());
+                } else {
+                    spdlog::warn("Rejected HANDSHAKE_INIT from {}", conn->remote_endpoint_str());
+                    conn->close("HANDSHAKE_INIT validation failed");
+                }
+            } else {
+                spdlog::warn("Malformed HANDSHAKE_INIT from {}", conn->remote_endpoint_str());
+                conn->close("Malformed HANDSHAKE_INIT");
+            }
+            break;
+        }
+
+        case MessageType::HANDSHAKE_RESPONSE: {
+            spdlog::debug("HANDSHAKE_RESPONSE received from {}", conn->remote_endpoint_str());
+            break;
+        }
+
+        case MessageType::HANDSHAKE_COMPLETE: {
+            security::HandshakeComplete comp;
+            if (security::deserialize_handshake_complete(frame.payload, comp)) {
+                auto session = conn->secure_session();
+                if (session && session->process_handshake_complete(comp)) {
+                    conn->set_peer_id(session->peer_node_id());
+                    spdlog::info("HANDSHAKE_COMPLETE verified: Secure session {} ACTIVE with peer {}",
+                                 session->session_id().to_short_hex(),
+                                 session->peer_node_id().to_short_hex());
+                } else {
+                    spdlog::warn("Invalid HANDSHAKE_COMPLETE from {}", conn->remote_endpoint_str());
+                    conn->close("HANDSHAKE_COMPLETE validation failed");
+                }
+            } else {
+                spdlog::warn("Malformed HANDSHAKE_COMPLETE from {}", conn->remote_endpoint_str());
+                conn->close("Malformed HANDSHAKE_COMPLETE");
+            }
             break;
         }
 
@@ -1168,6 +1220,75 @@ void Node::schedule_republish() {
             schedule_republish();
         }
     });
+}
+
+void Node::initiate_handshake(transport::TcpConnection::Ptr conn,
+                              std::function<void(bool success)> callback) {
+    if (!conn || !conn->is_open()) {
+        if (callback) callback(false);
+        return;
+    }
+
+    auto session = std::make_shared<security::SecureSession>();
+    conn->set_secure_session(session);
+
+    auto init = session->initiate_handshake(*keypair_);
+    auto payload = security::serialize_handshake_init(init);
+
+    auto rid = RequestID::generate();
+    transport::Frame req_frame(transport::MessageType::HANDSHAKE_INIT, rid);
+    req_frame.payload = std::move(payload);
+
+    auto timer = std::make_shared<asio::steady_timer>(
+        io_, std::chrono::milliseconds(config_.transport.io_timeout_ms));
+
+    {
+        std::lock_guard lock(pending_mutex_);
+        pending_requests_[rid] = [this, conn, session, timer, callback]
+            (const transport::Frame& resp_frame) {
+            timer->cancel();
+            if (resp_frame.type != transport::MessageType::HANDSHAKE_RESPONSE) {
+                if (callback) callback(false);
+                return;
+            }
+
+            security::HandshakeResponse resp;
+            if (!security::deserialize_handshake_response(resp_frame.payload, resp)) {
+                spdlog::warn("Failed to deserialize HANDSHAKE_RESPONSE from {}", conn->remote_endpoint_str());
+                if (callback) callback(false);
+                return;
+            }
+
+            auto comp = session->process_handshake_response(resp, *keypair_);
+            if (!comp) {
+                spdlog::warn("Failed to process HANDSHAKE_RESPONSE from {}", conn->remote_endpoint_str());
+                if (callback) callback(false);
+                return;
+            }
+
+            conn->set_peer_id(session->peer_node_id());
+
+            // Send HANDSHAKE_COMPLETE
+            transport::Frame comp_frame(transport::MessageType::HANDSHAKE_COMPLETE, RequestID::generate());
+            comp_frame.payload = security::serialize_handshake_complete(*comp);
+            conn->send(comp_frame);
+
+            spdlog::info("AKE handshake successfully completed with peer {}", session->peer_node_id().to_short_hex());
+            if (callback) callback(true);
+        };
+    }
+
+    timer->async_wait([this, rid, callback](const std::error_code& ec) {
+        if (!ec) {
+            {
+                std::lock_guard lock(pending_mutex_);
+                pending_requests_.erase(rid);
+            }
+            if (callback) callback(false);
+        }
+    });
+
+    conn->send(req_frame);
 }
 
 } // namespace p2p

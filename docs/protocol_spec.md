@@ -261,8 +261,105 @@ CBOR-структура (map). Примеры:
 - **Фоновая очистка**: таймер на каждом узле периодически (каждые 15–30 с) вызывает `purge_expired()` для удаления просроченных записей из оперативной памяти.
 - **Периодическое переопубликование**: узел-владелец каждые 80 секунд ($\le \text{TTL} / 2$) выпускает обновлённую версию своей записи с инкрементированным `sequence_number`, новым временем действия и свежей подписью Ed25519, распространяя её по $R = 3$ хранителям.
 
+---
+
+## 4. Протокол AKE и защита сессий (Stage 4)
+
+### 4.1. Обзор протокола
+
+Собственный протокол AKE (Authenticated Key Exchange) решает задачу взаимной аутентификации узлов и установления защищённого симметричного канала связи без использования внешних удостоверяющих центров (PKI / CA) и TLS.
+
+Протокол обеспечивает:
+- **Взаимную аутентификацию (Mutual Authentication)** на базе долговременных ключей Ed25519;
+- **Прямую секретность (Forward Secrecy)** за счёт эфемерного обмена Диффи-Хеллмана на кривой Curve25519 (X25519, RFC 7748);
+- **Деривацию сессионных ключей** по стандарту HKDF-SHA256 (RFC 5869);
+- **Защиту от атак посредника (MITM)** за счёт включения всех параметров рукопожатия в криптографически подписываемые транскрипты $T_B$ и $T_A$;
+- **Симметричное шифрование кадров** ChaCha20-Poly1305 (RFC 8439) с аутентификацией 24-байтного заголовка кадра в качестве AAD;
+- **Защиту от повторов (Anti-Replay)** на базе скользящего окна `ReplayCache` (256 пакетов).
+
+### 4.2. Схема сообщений рукопожатия
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Alice as Инициатор (Alice)
+    participant Bob as Ответчик (Bob)
+
+    Note over Alice: 1. Генерация eph_keypair_A (X25519)<br/>2. Генерация nonce_A (32B)
+    Alice->>Bob: HANDSHAKE_INIT (0x50)<br/>{ver, node_id_A, id_pk_A, eph_pk_A, nonce_A}
+
+    Note over Bob: 1. Валидация SHA-256(id_pk_A) == node_id_A<br/>2. Генерация eph_keypair_B (X25519), nonce_B (32B)<br/>3. Общий секрет S = X25519(sk_eph_B, eph_pk_A)<br/>4. Деривация ключей HKDF-SHA256(S, Salt)<br/>5. Транскрипт T_B -> Sig_B = Ed25519_Sign(sk_B, T_B)
+    Bob->>Alice: HANDSHAKE_RESPONSE (0x51)<br/>{session_id, node_id_B, id_pk_B, eph_pk_B, nonce_B, Sig_B}
+
+    Note over Alice: 1. Валидация SHA-256(id_pk_B) == node_id_B<br/>2. Проверка Sig_B на транскрипте T_B<br/>3. Общий секрет S = X25519(sk_eph_A, eph_pk_B)<br/>4. Деривация аналогичных ключей HKDF-SHA256<br/>5. Транскрипт T_A -> Sig_A = Ed25519_Sign(sk_A, T_A)<br/>6. Переход сессии в состояние ACTIVE
+    Alice->>Bob: HANDSHAKE_COMPLETE (0x52)<br/>{session_id, Sig_A}
+
+    Note over Bob: 1. Проверка Sig_A на транскрипте T_A<br/>2. Переход сессии в состояние ACTIVE
+
+    rect rgb(240, 255, 240)
+        Note over Alice, Bob: Защищённый канал: кадры шифруются ChaCha20-Poly1305<br/>с заголовком кадра в качестве AAD и скользящим окном ReplayCache
+        Alice->>Bob: ENCRYPTED_FRAME (flags |= IS_ENCRYPTED)
+        Bob-->>Alice: ENCRYPTED_FRAME (flags |= IS_ENCRYPTED)
+    end
+```
+
+### 4.3. Канонические бинарные транскрипты
+
+#### Транскрипт ответчика $T_B$ (287 байт)
+```
+"P2P-AKE-V1-RESP" (15B)
+|| init.node_id (32B)
+|| init.identity_public_key (32B)
+|| init.ephemeral_public_key (32B)
+|| init.nonce (32B)
+|| resp.session_id (16B)
+|| resp.node_id (32B)
+|| resp.identity_public_key (32B)
+|| resp.ephemeral_public_key (32B)
+|| resp.nonce (32B)
+```
+
+#### Транскрипт инициатора $T_A$ (302 байта)
+```
+"P2P-AKE-V1-COMP" (15B)
+|| T_B (287B)
+```
+
+### 4.4. Деривация сессионных ключей (HKDF-SHA256)
+
+1. **Extract**:
+   $$Salt = Nonce_A \parallel Nonce_B \quad (64\text{ байта})$$
+   $$PRK = \text{HMAC-SHA256}(Salt, S) \quad (32\text{ байта})$$
+2. **Expand**:
+   $$OKM = \text{HKDF-Expand}(PRK, \text{"p2p-ake-session-keys-v1"}, 64)$$
+   - `key_a_to_b` = $OKM[0..31]$ (32 байта)
+   - `key_b_to_a` = $OKM[32..63]$ (32 байта)
+
+Для Инициатора (Alice): $TX = key\_a\_to\_b$, $RX = key\_b\_to\_a$.
+Для Ответчика (Bob): $TX = key\_b\_to\_a$, $RX = key\_a\_to\_b$.
+
+### 4.5. Формат зашифрованного кадра и защита от повторов
+
+Полезная нагрузка зашифрованного кадра (флаг `FrameFlags::IS_ENCRYPTED = 0x0004`):
+```
++-------------------------------------------------------------+
+| sequence_number (uint64-be, 8 байт)                         |
++-------------------------------------------------------------+
+| ChaCha20-Poly1305 Ciphertext (variable length)              |
++-------------------------------------------------------------+
+| Poly1305 Authentication Tag (16 байт)                       |
++-------------------------------------------------------------+
+```
+
+1. **Формирование 12-байтного nonce**:
+   `0x00000000` (4 нуля) $\parallel$ `sequence_number` (uint64-be, 8 байт).
+2. **AAD (Additional Authenticated Data)**:
+   24 байта оригинального заголовка кадра (`version`, `type`, `flags`, `request_id`, `payload_length`). Защищает заголовок кадра от подмены типа или флагов злоумышленником.
+3. **Фильтрация повторов (`ReplayCache`)**:
+   Скользящее окно 256 пакетов на базе битовой маски. Пакеты старше окна отбрасываются, дубликаты внутри окна строго отклоняются (`ReplayDetected`).
+
 ## TODO
 
-- [ ] §4. Протокол AKE-handshake (транскрипт, деривация ключей)
+- [x] §4. Протокол AKE-handshake (транскрипт, деривация ключей)
 - [ ] §5. Протокол построения туннеля
 - [ ] §6. Протокол передачи файлов

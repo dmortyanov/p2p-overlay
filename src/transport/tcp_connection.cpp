@@ -2,6 +2,7 @@
 /// @brief TCP connection implementation with async frame I/O.
 
 #include "transport/tcp_connection.hpp"
+#include "security/secure_session.hpp"
 
 #include <spdlog/spdlog.h>
 
@@ -202,12 +203,37 @@ void TcpConnection::do_read() {
     );
 }
 
+void TcpConnection::set_secure_session(std::shared_ptr<security::SecureSession> session) {
+    secure_session_ = std::move(session);
+}
+
+std::shared_ptr<security::SecureSession> TcpConnection::secure_session() const {
+    return secure_session_;
+}
+
 void TcpConnection::process_incoming() {
     while (true) {
         auto result = parser_.next_frame();
         if (result.has_value()) {
             // Complete frame received
             auto& frame = result.value();
+
+            if (static_cast<uint16_t>(frame.flags) & static_cast<uint16_t>(FrameFlags::IS_ENCRYPTED)) {
+                if (secure_session_ && secure_session_->is_active()) {
+                    if (!secure_session_->decrypt_frame(frame)) {
+                        spdlog::warn("Decryption or replay check failed from {}, closing connection",
+                                     remote_endpoint_str());
+                        close("Decryption or replay check failed");
+                        return;
+                    }
+                } else {
+                    spdlog::warn("Received encrypted frame without active secure session from {}, closing",
+                                 remote_endpoint_str());
+                    close("Encrypted frame without active secure session");
+                    return;
+                }
+            }
+
             spdlog::trace("Received frame: type={}, payload={} bytes, from={}",
                           message_type_name(frame.type),
                           frame.payload.size(),
@@ -244,10 +270,23 @@ void TcpConnection::send(const Frame& frame) {
 
     reset_io_timer();
 
-    auto data = frame.serialize();
+    Frame to_send = frame;
+    if (secure_session_ && secure_session_->is_active()) {
+        if (!(static_cast<uint16_t>(to_send.flags) & static_cast<uint16_t>(FrameFlags::IS_ENCRYPTED)) &&
+            to_send.type != MessageType::HANDSHAKE_INIT &&
+            to_send.type != MessageType::HANDSHAKE_RESPONSE &&
+            to_send.type != MessageType::HANDSHAKE_COMPLETE) {
+            if (!secure_session_->encrypt_frame(to_send)) {
+                spdlog::warn("Failed to encrypt frame for peer {}", remote_endpoint_str());
+                return;
+            }
+        }
+    }
+
+    auto data = to_send.serialize();
     spdlog::trace("Sending frame: type={}, payload={} bytes, to={}",
-                  message_type_name(frame.type),
-                  frame.payload.size(),
+                  message_type_name(to_send.type),
+                  to_send.payload.size(),
                   remote_endpoint_str());
 
     bool was_writing = writing_;

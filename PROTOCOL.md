@@ -69,3 +69,34 @@
 - `FIND_VALUE_RESPONSE` (`0x15`): возвращает найденную запись (`has_value = true, record`), либо список ближайших контактов (`has_value = false, closest_nodes`).
 
 Детальное описание процедур валидации, репликации ($R=3$, кворум $Q \ge 2$), сценария отказа хранителей (E3-5) и разрешения конфликтов приведено в [`docs/protocol_spec.md`](file:///c:/school/4cource/seti/p2p-overlay/docs/protocol_spec.md).
+
+---
+
+## 4. Протокол AKE и защита сессий (Stage 4)
+
+### Сообщения рукопожатия AKE
+- `HANDSHAKE_INIT` (`0x50`): версия, `node_id`, долговременный `identity_public_key` (Ed25519, 32B), эфемерный `ephemeral_public_key` (X25519, 32B), случайный `nonce` (32B).
+- `HANDSHAKE_RESPONSE` (`0x51`, flag `IS_RESPONSE`): `session_id` (16B UUID), `node_id`, `identity_public_key` (32B), `ephemeral_public_key` (32B), случайный `nonce` (32B), цифровая подпись `signature` (Ed25519, 64B) по транскрипту $T_B$.
+- `HANDSHAKE_COMPLETE` (`0x52`): `session_id` (16B), цифровая подпись `signature` (Ed25519, 64B) по транскрипту $T_A$.
+
+### Формат транскриптов для подписи Ed25519
+1. **Транскрипт ответчика $T_B$** (287 байт):
+   `"P2P-AKE-V1-RESP"` (15B) || `init.node_id` (32B) || `init.id_pk` (32B) || `init.eph_pk` (32B) || `init.nonce` (32B) || `resp.session_id` (16B) || `resp.node_id` (32B) || `resp.id_pk` (32B) || `resp.eph_pk` (32B) || `resp.nonce` (32B)
+2. **Транскрипт инициатора $T_A$** (302 байта):
+   `"P2P-AKE-V1-COMP"` (15B) || $T_B$ (287B)
+
+### Деривация сессионных ключей (HKDF-SHA256, RFC 5869)
+- Общий секрет Диффи-Хеллмана: $S = \text{X25519}(sk_{\text{eph}}, pk_{\text{peer\_eph}})$ (32 байта)
+- Соль: $Salt = nonce_A \parallel nonce_B$ (64 байта)
+- Псевдослучайный ключ: $PRK = \text{HMAC-SHA256}(Salt, S)$
+- Выходной материал ключей: $OKM = \text{HKDF-Expand}(PRK, \text{"p2p-ake-session-keys-v1"}, 64)$
+  - Первые 32 байта: `key_a_to_b` (симметричный ключ от Инициатора к Ответчику)
+  - Вторые 32 байта: `key_b_to_a` (симметричный ключ от Ответчика к Инициатору)
+
+### Шифрование кадров ChaCha20-Poly1305 (AEAD)
+- Флаг в заголовке: `FrameFlags::IS_ENCRYPTED = 0x0004`
+- Аутентифицированные дополнительные данные (AAD): 24 байта оригинального заголовка кадра (`version`, `type`, `flags`, `request_id`, `payload_length`)
+- Формирование 12-байтного nonce: `0x00000000` (4B) || `sequence_number` (be64, 8B)
+- Формат полезной нагрузки зашифрованного кадра:
+  `sequence_number` (be64, 8B) || `ciphertext` || `Poly1305_tag` (16B)
+- Защита от повторов: скользящее окно `ReplayCache` (размер 256 кадров) с автоматическим сбросом дубликатов и устаревших пакетов.

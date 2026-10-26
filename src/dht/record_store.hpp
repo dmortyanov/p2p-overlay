@@ -53,7 +53,7 @@ private:
     mutable std::mutex mutex_;
     // Primary key -> record
     std::unordered_map<NodeID, NodeRecord> records_;
-    // Owner node_id -> highest sequence_number seen
+    // Key -> highest sequence_number seen
     std::unordered_map<NodeID, uint64_t> highest_seq_;
 };
 

@@ -70,6 +70,16 @@ add_library(p2p_core STATIC
     src/dht/record_store.hpp
     src/dht/record_store.cpp
 
+    # Security (Stage 4)
+    src/security/crypto_utils.hpp
+    src/security/crypto_utils.cpp
+    src/security/ake_messages.hpp
+    src/security/ake_messages.cpp
+    src/security/replay_cache.hpp
+    src/security/replay_cache.cpp
+    src/security/secure_session.hpp
+    src/security/secure_session.cpp
+
     # Node
     src/node.hpp
     src/node.cpp
@@ -159,10 +169,26 @@ if(BUILD_TESTS)
     target_link_libraries(test_dht_storage PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_dht_storage COMMAND test_dht_storage)
 
+    # Stage 4: E4-1..E4-6 AKE cryptographic handshake, replay cache, and secure session unit tests
+    add_executable(test_ake tests/unit/test_ake.cpp)
+    target_link_libraries(test_ake PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_ake COMMAND test_ake)
+
+    # Stage 4: E4-7 Negative AKE tests (identity spoofing, replay attacks, bit-flipping, AAD tampering)
+    add_executable(test_negative_ake tests/negative/test_negative_ake.cpp)
+    target_link_libraries(test_negative_ake PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_negative_ake COMMAND test_negative_ake)
+
+    # Stage 4: E4-8 Live network AKE handshake and transparent encrypted communication integration test
+    add_executable(test_ake_integration tests/integration/test_ake_integration.cpp)
+    target_link_libraries(test_ake_integration PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_ake_integration COMMAND test_ake_integration)
+
     set_tests_properties(
         test_frame test_node_id test_k_bucket test_routing_table
         test_lookup test_lru_scenarios test_negative_identity test_negative_transport test_dht_integration
         test_node_record test_record_store test_dht_storage
+        test_ake test_negative_ake test_ake_integration
         PROPERTIES TIMEOUT 30
     )
 endif()

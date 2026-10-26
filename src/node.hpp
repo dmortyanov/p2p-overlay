@@ -114,6 +114,13 @@ public:
     /// Probe the least recently seen contact in a full bucket (E2-4).
     void probe_lru_contact(const PeerInfo& lru);
 
+    /// Establish an authenticated, encrypted AKE session with a peer (Stage 4, E4-8).
+    void initiate_handshake(transport::TcpConnection::Ptr conn,
+                            std::function<void(bool success)> callback = nullptr);
+
+    /// Find an active connection to the given NodeID.
+    [[nodiscard]] transport::TcpConnection::Ptr get_connection_to(const NodeID& id);
+
 private:
     /// Handle a new incoming connection.
     void on_accept(transport::TcpConnection::Ptr conn);
@@ -126,9 +133,6 @@ private:
 
     /// Register a connection and set up handlers.
     void register_connection(transport::TcpConnection::Ptr conn);
-
-    /// Find an active connection to the given NodeID.
-    transport::TcpConnection::Ptr get_connection_to(const NodeID& id);
 
     /// Schedule periodic TTL purge (E3-7).
     void schedule_purge();

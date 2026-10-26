@@ -14,8 +14,8 @@ RecordValidationError RecordStore::put(const NodeID& key,
     std::lock_guard lock(mutex_);
 
     // 2. Anti-rollback check (E3-6)
-    // Check if we've seen a higher or equal sequence number for this owner
-    auto seq_it = highest_seq_.find(record.node_id);
+    // Check if we've seen a higher or equal sequence number for this key
+    auto seq_it = highest_seq_.find(key);
     if (seq_it != highest_seq_.end()) {
         if (record.sequence_number <= seq_it->second) {
             return RecordValidationError::RollbackDetected;
@@ -32,7 +32,7 @@ RecordValidationError RecordStore::put(const NodeID& key,
 
     // 4. Update storage and sequence tracker
     records_[key] = record;
-    highest_seq_[record.node_id] = record.sequence_number;
+    highest_seq_[key] = record.sequence_number;
 
     return RecordValidationError::None;
 }
