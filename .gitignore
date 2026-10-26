@@ -52,3 +52,12 @@ pcap/*.pcap
 *.key
 *.pem
 !tests/fixtures/*.pem
+
+# PCAP and Demo artifacts
+*.pcap
+p2p_demo
+p2p_demo.cpp
+demo_*.sh
+demo_*.py
+run_cap.sh
+
