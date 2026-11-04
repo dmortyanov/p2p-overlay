@@ -93,6 +93,15 @@ struct NodeID {
         return true;
     }
 
+    /// Generate random NodeID.
+    [[nodiscard]] static NodeID random() {
+        NodeID id;
+        for (auto& b : id.data) {
+            b = static_cast<uint8_t>(rand() & 0xFF);
+        }
+        return id;
+    }
+
 private:
     static int hex_char_to_nibble(char c) {
         if (c >= '0' && c <= '9') return c - '0';

@@ -42,6 +42,14 @@ void Node::start() {
     // Initialize DHT local record store (Stage 3: E3-2, E3-6)
     record_store_ = std::make_unique<dht::RecordStore>();
 
+    // Initialize Tunnel Manager (Stage 5)
+    auto profiler = std::make_shared<tunnel::RelayProfiler>(
+        config_.tunnel.profiling.ema_alpha_latency,
+        config_.tunnel.profiling.ema_alpha_success);
+    auto pool = std::make_shared<tunnel::TunnelPool>(config_.tunnel.pool_size);
+    tunnel_manager_ = std::make_unique<tunnel::TunnelManager>(
+        node_id(), *keypair_, pool, profiler);
+
     spdlog::info("═══════════════════════════════════════════════");
     spdlog::info("  P2P Overlay Node starting");
     spdlog::info("  NodeID:  {}", node_id().to_hex());
@@ -619,6 +627,111 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
             } else {
                 spdlog::warn("Malformed HANDSHAKE_COMPLETE from {}", conn->remote_endpoint_str());
                 conn->close("Malformed HANDSHAKE_COMPLETE");
+            }
+            break;
+        }
+
+        // ─── Tunnel Management (Stage 5) ───────────────────────────
+        case MessageType::TUNNEL_BUILD: {
+            tunnel::TunnelBuildMsg build_msg;
+            if (tunnel::deserialize_tunnel_build(frame.payload, build_msg)) {
+                NodeID sender_id = conn->peer_id().value_or(NodeID{});
+                auto res = tunnel_manager_->handle_tunnel_build(sender_id, build_msg);
+                if (std::holds_alternative<tunnel::TunnelBuildOkMsg>(res)) {
+                    auto ok_payload = tunnel::serialize_tunnel_build_ok(std::get<tunnel::TunnelBuildOkMsg>(res));
+                    transport::Frame ok_frame(MessageType::TUNNEL_BUILD_OK, frame.request_id);
+                    ok_frame.flags |= FrameFlags::IS_RESPONSE;
+                    ok_frame.payload = std::move(ok_payload);
+                    conn->send(ok_frame);
+                } else {
+                    auto fail_payload = tunnel::serialize_tunnel_build_fail(std::get<tunnel::TunnelBuildFailMsg>(res));
+                    transport::Frame fail_frame(MessageType::TUNNEL_BUILD_FAIL, frame.request_id);
+                    fail_frame.flags |= FrameFlags::IS_RESPONSE;
+                    fail_frame.payload = std::move(fail_payload);
+                    conn->send(fail_frame);
+                }
+            } else {
+                spdlog::warn("Malformed TUNNEL_BUILD from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::TUNNEL_BUILD_OK: {
+            tunnel::TunnelBuildOkMsg ok_msg;
+            if (tunnel::deserialize_tunnel_build_ok(frame.payload, ok_msg)) {
+                NodeID sender_id = conn->peer_id().value_or(NodeID{});
+                tunnel_manager_->handle_tunnel_build_ok(sender_id, ok_msg);
+            }
+            break;
+        }
+
+        case MessageType::TUNNEL_BUILD_FAIL: {
+            tunnel::TunnelBuildFailMsg fail_msg;
+            if (tunnel::deserialize_tunnel_build_fail(frame.payload, fail_msg)) {
+                NodeID sender_id = conn->peer_id().value_or(NodeID{});
+                tunnel_manager_->handle_tunnel_build_fail(sender_id, fail_msg);
+            }
+            break;
+        }
+
+        case MessageType::TUNNEL_DATA: {
+            tunnel::TunnelDataMsg data_msg;
+            if (tunnel::deserialize_tunnel_data(frame.payload, data_msg)) {
+                NodeID sender_id = conn->peer_id().value_or(NodeID{});
+                auto peeled = tunnel_manager_->handle_tunnel_data(sender_id, data_msg);
+                if (peeled) {
+                    if (!peeled->is_terminal) {
+                        // Forward to next relay
+                        connect_to_peer(peeled->next_hop_address.host, peeled->next_hop_address.port);
+                        auto next_conn = get_connection_to(peeled->next_hop_node_id);
+                        if (!next_conn) {
+                            // Find connection by address
+                            std::lock_guard<std::mutex> lock(conns_mutex_);
+                            for (auto& c : connections_) {
+                                if (c->remote_endpoint_str().find(peeled->next_hop_address.host) != std::string::npos) {
+                                    next_conn = c;
+                                    break;
+                                }
+                            }
+                        }
+                        if (next_conn) {
+                            tunnel::TunnelDataMsg fwd_msg;
+                            fwd_msg.circuit_id = data_msg.circuit_id;
+                            fwd_msg.sequence_number = data_msg.sequence_number;
+                            fwd_msg.onion_payload = std::move(peeled->payload);
+                            transport::Frame fwd_frame(MessageType::TUNNEL_DATA, RequestID::generate());
+                            fwd_frame.payload = tunnel::serialize_tunnel_data(fwd_msg);
+                            next_conn->send(fwd_frame);
+                        } else {
+                            spdlog::warn("Cannot forward TUNNEL_DATA: next hop {} unreachable",
+                                         peeled->next_hop_node_id.to_short_hex());
+                        }
+                    } else {
+                        // Terminal hop: send ACK back to previous hop
+                        tunnel::TunnelAckMsg ack;
+                        ack.circuit_id = data_msg.circuit_id;
+                        ack.sequence_number = data_msg.sequence_number;
+                        ack.success = true;
+                        transport::Frame ack_frame(MessageType::TUNNEL_ACK, frame.request_id);
+                        ack_frame.payload = tunnel::serialize_tunnel_ack(ack);
+                        conn->send(ack_frame);
+                    }
+                }
+            } else {
+                spdlog::warn("Malformed TUNNEL_DATA from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::TUNNEL_ACK: {
+            spdlog::debug("TUNNEL_ACK received from {}", conn->remote_endpoint_str());
+            break;
+        }
+
+        case MessageType::TUNNEL_CLOSE: {
+            tunnel::TunnelCloseMsg close_msg;
+            if (tunnel::deserialize_tunnel_close(frame.payload, close_msg)) {
+                tunnel_manager_->close_tunnel(close_msg.circuit_id);
             }
             break;
         }
@@ -1289,6 +1402,81 @@ void Node::initiate_handshake(transport::TcpConnection::Ptr conn,
     });
 
     conn->send(req_frame);
+}
+
+void Node::build_tunnel(const NodeID& destination,
+                        std::size_t hop_count,
+                        tunnel::TunnelBuildCallback callback)
+{
+    // Find candidate relays from routing table
+    auto candidates = routing_table_->find_closest(destination, 20);
+
+    // Select hops using RelayProfiler (enforcing subnet diversity and excluding self + destination)
+    std::vector<NodeID> excluded = {node_id(), destination};
+    auto selected_hops = tunnel_manager_->profiler()->select_hops(candidates, hop_count, excluded);
+
+    if (selected_hops.size() < hop_count) {
+        spdlog::warn("Insufficient diverse hops available (found {}, needed {}) for tunnel to {}",
+                     selected_hops.size(), hop_count, destination.to_short_hex());
+        if (callback) callback(false, nullptr);
+        return;
+    }
+
+    tunnel_manager_->async_build_tunnel(
+        selected_hops,
+        destination,
+        [this](const PeerAddress& target, const tunnel::TunnelBuildMsg& msg) {
+            connect_to_peer(target.host, target.port);
+            transport::TcpConnection::Ptr conn = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(conns_mutex_);
+                for (auto& c : connections_) {
+                    if (c->remote_endpoint_str().find(target.host) != std::string::npos) {
+                        conn = c;
+                        break;
+                    }
+                }
+            }
+            if (conn) {
+                transport::Frame frame(transport::MessageType::TUNNEL_BUILD, RequestID::generate());
+                frame.payload = tunnel::serialize_tunnel_build(msg);
+                conn->send(frame);
+            }
+        },
+        std::move(callback));
+}
+
+bool Node::send_tunnel_data(const tunnel::CircuitID& circuit_id, ByteSpan payload) {
+    auto t = tunnel_manager_->pool()->get_tunnel(circuit_id);
+    if (!t || t->state() != tunnel::TunnelState::ACTIVE) {
+        return false;
+    }
+
+    auto onion = t->wrap_payload(payload);
+    tunnel::TunnelDataMsg data_msg;
+    data_msg.circuit_id = circuit_id;
+    data_msg.sequence_number = t->next_sequence();
+    data_msg.onion_payload = std::move(onion);
+
+    auto entry_hop = t->entry_hop();
+    auto conn = get_connection_to(entry_hop.node_id);
+    if (!conn) {
+        std::lock_guard<std::mutex> lock(conns_mutex_);
+        for (auto& c : connections_) {
+            if (c->remote_endpoint_str().find(entry_hop.address.host) != std::string::npos) {
+                conn = c;
+                break;
+            }
+        }
+    }
+
+    if (conn) {
+        transport::Frame frame(transport::MessageType::TUNNEL_DATA, RequestID::generate());
+        frame.payload = tunnel::serialize_tunnel_data(data_msg);
+        conn->send(frame);
+        return true;
+    }
+    return false;
 }
 
 } // namespace p2p

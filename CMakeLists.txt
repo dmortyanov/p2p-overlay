@@ -80,6 +80,20 @@ add_library(p2p_core STATIC
     src/security/secure_session.hpp
     src/security/secure_session.cpp
 
+    # Tunnel (Stage 5)
+    src/tunnel/tunnel_types.hpp
+    src/tunnel/tunnel_types.cpp
+    src/tunnel/onion_packet.hpp
+    src/tunnel/onion_packet.cpp
+    src/tunnel/relay_profiler.hpp
+    src/tunnel/relay_profiler.cpp
+    src/tunnel/tunnel.hpp
+    src/tunnel/tunnel.cpp
+    src/tunnel/tunnel_pool.hpp
+    src/tunnel/tunnel_pool.cpp
+    src/tunnel/tunnel_manager.hpp
+    src/tunnel/tunnel_manager.cpp
+
     # Node
     src/node.hpp
     src/node.cpp
@@ -184,11 +198,32 @@ if(BUILD_TESTS)
     target_link_libraries(test_ake_integration PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_ake_integration COMMAND test_ake_integration)
 
+    # Stage 5: E5-1, E5-2 Onion multi-layer encryption and peeling unit tests
+    add_executable(test_onion_packet tests/unit/test_onion_packet.cpp)
+    target_link_libraries(test_onion_packet PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_onion_packet COMMAND test_onion_packet)
+
+    # Stage 5: E5-3 Relay profiler, EMA tracking and subnet diversity unit tests
+    add_executable(test_relay_profiler tests/unit/test_relay_profiler.cpp)
+    target_link_libraries(test_relay_profiler PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_relay_profiler COMMAND test_relay_profiler)
+
+    # Stage 5: E5-4 Negative tunnel tests (insufficient hops, truncated peel, pool pruning)
+    add_executable(test_negative_tunnel tests/negative/test_negative_tunnel.cpp)
+    target_link_libraries(test_negative_tunnel PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_negative_tunnel COMMAND test_negative_tunnel)
+
+    # Stage 5: E5-5 Multi-hop onion circuit build and transit data integration test
+    add_executable(test_tunnel_integration tests/integration/test_tunnel_integration.cpp)
+    target_link_libraries(test_tunnel_integration PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_tunnel_integration COMMAND test_tunnel_integration)
+
     set_tests_properties(
         test_frame test_node_id test_k_bucket test_routing_table
         test_lookup test_lru_scenarios test_negative_identity test_negative_transport test_dht_integration
         test_node_record test_record_store test_dht_storage
         test_ake test_negative_ake test_ake_integration
+        test_onion_packet test_relay_profiler test_negative_tunnel test_tunnel_integration
         PROPERTIES TIMEOUT 30
     )
 endif()

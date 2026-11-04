@@ -21,6 +21,7 @@
 #include "identity/keypair.hpp"
 #include "transport/tcp_connection.hpp"
 #include "transport/tcp_listener.hpp"
+#include "tunnel/tunnel_manager.hpp"
 
 #include <asio.hpp>
 
@@ -70,6 +71,10 @@ public:
     [[nodiscard]] const dht::RecordStore& record_store() const { return *record_store_; }
     [[nodiscard]] dht::RecordStore& record_store() { return *record_store_; }
 
+    /// Access tunnel manager (Stage 5 onion routing).
+    [[nodiscard]] const tunnel::TunnelManager& tunnel_manager() const { return *tunnel_manager_; }
+    [[nodiscard]] tunnel::TunnelManager& tunnel_manager() { return *tunnel_manager_; }
+
     /// Query closest nodes to target ID from local routing table.
     [[nodiscard]] std::vector<PeerInfo> find_closest_nodes(const NodeID& target,
                                                            std::size_t count = 4) const;
@@ -118,6 +123,14 @@ public:
     void initiate_handshake(transport::TcpConnection::Ptr conn,
                             std::function<void(bool success)> callback = nullptr);
 
+    /// Build a multi-hop onion tunnel (>= 3 hops) to destination (Stage 5).
+    void build_tunnel(const NodeID& destination,
+                      std::size_t hop_count = 3,
+                      tunnel::TunnelBuildCallback callback = nullptr);
+
+    /// Send data through an active tunnel (Stage 5).
+    bool send_tunnel_data(const tunnel::CircuitID& circuit_id, ByteSpan payload);
+
     /// Find an active connection to the given NodeID.
     [[nodiscard]] transport::TcpConnection::Ptr get_connection_to(const NodeID& id);
 
@@ -145,6 +158,7 @@ private:
     std::unique_ptr<identity::Keypair> keypair_;
     std::unique_ptr<dht::RoutingTable> routing_table_;
     std::unique_ptr<dht::RecordStore>  record_store_;
+    std::unique_ptr<tunnel::TunnelManager> tunnel_manager_;
     transport::TcpListener::Ptr        listener_;
 
     uint64_t                           record_seq_ = 0;
