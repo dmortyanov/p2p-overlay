@@ -123,6 +123,7 @@ struct RequestID {
     std::array<uint8_t, SIZE> data{};
 
     bool operator==(const RequestID& other) const = default;
+    auto operator<=>(const RequestID& other) const = default;
 
     /// Generate a random request ID using libsodium.
     static RequestID generate();

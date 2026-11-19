@@ -22,6 +22,9 @@
 #include "transport/tcp_connection.hpp"
 #include "transport/tcp_listener.hpp"
 #include "tunnel/tunnel_manager.hpp"
+#include "app/app_messages.hpp"
+#include "app/file_transfer.hpp"
+#include "app/message_service.hpp"
 
 #include <asio.hpp>
 
@@ -74,6 +77,25 @@ public:
     /// Access tunnel manager (Stage 5 onion routing).
     [[nodiscard]] const tunnel::TunnelManager& tunnel_manager() const { return *tunnel_manager_; }
     [[nodiscard]] tunnel::TunnelManager& tunnel_manager() { return *tunnel_manager_; }
+
+    /// Access application messaging service (Stage 6).
+    [[nodiscard]] const app::MessageService& message_service() const { return *message_service_; }
+    [[nodiscard]] app::MessageService& message_service() { return *message_service_; }
+
+    /// Access chunked file transfer manager (Stage 6).
+    [[nodiscard]] const app::FileTransferManager& file_transfer_manager() const { return *file_transfer_manager_; }
+    [[nodiscard]] app::FileTransferManager& file_transfer_manager() { return *file_transfer_manager_; }
+
+    /// Send an application message with delivery confirmation (Stage 6).
+    RequestID send_message(const NodeID& recipient,
+                           const std::string& text,
+                           app::DeliveryCallback cb = nullptr);
+
+    /// Send a local file to recipient in chunks with SHA-256 integrity (Stage 6).
+    bool send_file(const NodeID& recipient,
+                   const std::filesystem::path& filepath,
+                   app::FileSenderSession::ProgressFunc progress_cb = nullptr,
+                   app::FileSenderSession::CompletionFunc completion_cb = nullptr);
 
     /// Query closest nodes to target ID from local routing table.
     [[nodiscard]] std::vector<PeerInfo> find_closest_nodes(const NodeID& target,
@@ -159,6 +181,8 @@ private:
     std::unique_ptr<dht::RoutingTable> routing_table_;
     std::unique_ptr<dht::RecordStore>  record_store_;
     std::unique_ptr<tunnel::TunnelManager> tunnel_manager_;
+    std::unique_ptr<app::MessageService> message_service_;
+    std::unique_ptr<app::FileTransferManager> file_transfer_manager_;
     transport::TcpListener::Ptr        listener_;
 
     uint64_t                           record_seq_ = 0;

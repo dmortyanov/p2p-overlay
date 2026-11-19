@@ -94,6 +94,14 @@ add_library(p2p_core STATIC
     src/tunnel/tunnel_manager.hpp
     src/tunnel/tunnel_manager.cpp
 
+    # Application Layer (Stage 6)
+    src/app/app_messages.hpp
+    src/app/app_messages.cpp
+    src/app/file_transfer.hpp
+    src/app/file_transfer.cpp
+    src/app/message_service.hpp
+    src/app/message_service.cpp
+
     # Node
     src/node.hpp
     src/node.cpp
@@ -218,12 +226,33 @@ if(BUILD_TESTS)
     target_link_libraries(test_tunnel_integration PRIVATE p2p_core Catch2::Catch2WithMain)
     add_test(NAME test_tunnel_integration COMMAND test_tunnel_integration)
 
+    # Stage 6: E6-1 App messages serialization and path sanitization unit test
+    add_executable(test_app_messages tests/unit/test_app_messages.cpp)
+    target_link_libraries(test_app_messages PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_app_messages COMMAND test_app_messages)
+
+    # Stage 6: E6-2 Chunking, SHA-256 and sliding window unit test
+    add_executable(test_file_chunker tests/unit/test_file_chunker.cpp)
+    target_link_libraries(test_file_chunker PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_file_chunker COMMAND test_file_chunker)
+
+    # Stage 6: E6-3 Negative file transfer tests (path traversal, corrupted chunk hash, tampered whole file)
+    add_executable(test_negative_file_transfer tests/negative/test_negative_file_transfer.cpp)
+    target_link_libraries(test_negative_file_transfer PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_negative_file_transfer COMMAND test_negative_file_transfer)
+
+    # Stage 6: E6-4 E2E Messaging with ACK and Multi-hop Tunnel File Transfer integration test
+    add_executable(test_app_integration tests/integration/test_app_integration.cpp)
+    target_link_libraries(test_app_integration PRIVATE p2p_core Catch2::Catch2WithMain)
+    add_test(NAME test_app_integration COMMAND test_app_integration)
+
     set_tests_properties(
         test_frame test_node_id test_k_bucket test_routing_table
         test_lookup test_lru_scenarios test_negative_identity test_negative_transport test_dht_integration
         test_node_record test_record_store test_dht_storage
         test_ake test_negative_ake test_ake_integration
         test_onion_packet test_relay_profiler test_negative_tunnel test_tunnel_integration
+        test_app_messages test_file_chunker test_negative_file_transfer test_app_integration
         PROPERTIES TIMEOUT 30
     )
 endif()

@@ -50,6 +50,11 @@ void Node::start() {
     tunnel_manager_ = std::make_unique<tunnel::TunnelManager>(
         node_id(), *keypair_, pool, profiler);
 
+    // Initialize Application Services (Stage 6)
+    auto download_dir = data_dir / "downloads";
+    file_transfer_manager_ = std::make_unique<app::FileTransferManager>(download_dir);
+    message_service_ = std::make_unique<app::MessageService>(node_id());
+
     spdlog::info("═══════════════════════════════════════════════");
     spdlog::info("  P2P Overlay Node starting");
     spdlog::info("  NodeID:  {}", node_id().to_hex());
@@ -732,6 +737,98 @@ void Node::on_frame(transport::TcpConnection::Ptr conn,
             tunnel::TunnelCloseMsg close_msg;
             if (tunnel::deserialize_tunnel_close(frame.payload, close_msg)) {
                 tunnel_manager_->close_tunnel(close_msg.circuit_id);
+            }
+            break;
+        }
+
+        // ─── Application Services (Stage 6) ────────────────────────
+        case MessageType::APP_MESSAGE: {
+            app::AppMessage msg;
+            if (app::deserialize_app_message(frame.payload, msg)) {
+                spdlog::info("APP_MESSAGE from {}: {} bytes", msg.sender_id.to_short_hex(), msg.text.size());
+                auto ack = message_service_->handle_app_message(msg);
+                auto ack_bytes = app::serialize_app_ack(ack);
+                transport::Frame ack_frame(MessageType::APP_ACK, frame.request_id);
+                ack_frame.flags |= FrameFlags::IS_RESPONSE;
+                ack_frame.payload = std::move(ack_bytes);
+                conn->send(ack_frame);
+            } else {
+                spdlog::warn("Malformed APP_MESSAGE from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::APP_ACK: {
+            app::AppAck ack;
+            if (app::deserialize_app_ack(frame.payload, ack)) {
+                spdlog::debug("APP_ACK from {}: ok={}", ack.sender_id.to_short_hex(), ack.ok);
+                message_service_->handle_app_ack(ack);
+            } else {
+                spdlog::warn("Malformed APP_ACK from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::APP_FILE_META: {
+            app::FileMeta meta;
+            if (app::deserialize_file_meta(frame.payload, meta)) {
+                spdlog::info("APP_FILE_META from {}: file='{}', size={} B, chunks={}",
+                             meta.sender_id.to_short_hex(), meta.filename, meta.file_size, meta.total_chunks);
+                file_transfer_manager_->handle_file_meta(meta);
+            } else {
+                spdlog::warn("Malformed APP_FILE_META from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::APP_FILE_BLOCK: {
+            app::FileBlock block;
+            if (app::deserialize_file_block(frame.payload, block)) {
+                auto ack_opt = file_transfer_manager_->handle_file_block(
+                    block,
+                    [conn](const NodeID& target, const app::FileComplete& comp) {
+                        auto comp_bytes = app::serialize_file_complete(comp);
+                        transport::Frame comp_frame(MessageType::APP_FILE_COMPLETE, RequestID::generate());
+                        comp_frame.payload = std::move(comp_bytes);
+                        conn->send(comp_frame);
+                    });
+
+                if (ack_opt) {
+                    auto ack_bytes = app::serialize_file_ack(*ack_opt);
+                    transport::Frame ack_frame(MessageType::APP_FILE_ACK, frame.request_id);
+                    ack_frame.flags |= FrameFlags::IS_RESPONSE;
+                    ack_frame.payload = std::move(ack_bytes);
+                    conn->send(ack_frame);
+                }
+            } else {
+                spdlog::warn("Malformed APP_FILE_BLOCK from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::APP_FILE_ACK: {
+            app::FileAck ack;
+            if (app::deserialize_file_ack(frame.payload, ack)) {
+                file_transfer_manager_->handle_file_ack(
+                    ack,
+                    [conn](const NodeID& target, const app::FileBlock& blk) {
+                        auto blk_bytes = app::serialize_file_block(blk);
+                        transport::Frame blk_frame(MessageType::APP_FILE_BLOCK, RequestID::generate());
+                        blk_frame.payload = std::move(blk_bytes);
+                        conn->send(blk_frame);
+                    });
+            } else {
+                spdlog::warn("Malformed APP_FILE_ACK from {}", conn->remote_endpoint_str());
+            }
+            break;
+        }
+
+        case MessageType::APP_FILE_COMPLETE: {
+            app::FileComplete comp;
+            if (app::deserialize_file_complete(frame.payload, comp)) {
+                file_transfer_manager_->handle_file_complete(comp);
+            } else {
+                spdlog::warn("Malformed APP_FILE_COMPLETE from {}", conn->remote_endpoint_str());
             }
             break;
         }
@@ -1477,6 +1574,52 @@ bool Node::send_tunnel_data(const tunnel::CircuitID& circuit_id, ByteSpan payloa
         return true;
     }
     return false;
+}
+
+// ─── Application Layer Methods (Stage 6) ────────────────────────────────────
+
+RequestID Node::send_message(const NodeID& recipient,
+                             const std::string& text,
+                             app::DeliveryCallback cb) {
+    auto send_fn = [this](const NodeID& target, const app::AppMessage& msg) {
+        auto conn = get_connection_to(target);
+        if (conn) {
+            transport::Frame frame(transport::MessageType::APP_MESSAGE, msg.msg_id);
+            frame.payload = app::serialize_app_message(msg);
+            conn->send(frame);
+        } else {
+            spdlog::warn("Cannot send APP_MESSAGE: no connection to {}", target.to_short_hex());
+        }
+    };
+
+    return message_service_->send_message(recipient, text, send_fn, std::move(cb));
+}
+
+bool Node::send_file(const NodeID& recipient,
+                     const std::filesystem::path& filepath,
+                     app::FileSenderSession::ProgressFunc progress_cb,
+                     app::FileSenderSession::CompletionFunc completion_cb) {
+    auto conn = get_connection_to(recipient);
+    if (!conn) {
+        spdlog::warn("Cannot send file: no connection to {}", recipient.to_short_hex());
+        return false;
+    }
+
+    auto send_meta = [conn](const NodeID& target, const app::FileMeta& meta) {
+        transport::Frame frame(transport::MessageType::APP_FILE_META, meta.file_id);
+        frame.payload = app::serialize_file_meta(meta);
+        conn->send(frame);
+    };
+
+    auto send_block = [conn](const NodeID& target, const app::FileBlock& block) {
+        transport::Frame frame(transport::MessageType::APP_FILE_BLOCK, RequestID::generate());
+        frame.payload = app::serialize_file_block(block);
+        conn->send(frame);
+    };
+
+    return file_transfer_manager_->start_send_file(
+        filepath, node_id(), recipient, send_meta, send_block,
+        std::move(progress_cb), std::move(completion_cb));
 }
 
 } // namespace p2p
