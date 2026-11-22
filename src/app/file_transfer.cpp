@@ -257,6 +257,12 @@ FileAck FileReceiverSession::handle_block(const FileBlock& block) {
         return ack;
     }
 
+    if (block.data.size() > meta_.chunk_size) {
+        ack.ok = false;
+        ack.error_msg = "Chunk size exceeds session limit";
+        return ack;
+    }
+
     // Verify chunk SHA-256 hash
     auto computed_chunk_sha = compute_sha256(block.data);
     if (computed_chunk_sha != block.chunk_sha256) {
@@ -360,20 +366,15 @@ bool FileTransferManager::start_send_file(
 
 bool FileTransferManager::handle_file_meta(const FileMeta& meta) {
     std::lock_guard lock(mutex_);
+    if (meta.total_chunks == 0 || meta.chunk_size == 0) {
+        return false; // Zero-chunk or invalid chunk size
+    }
     if (receivers_.contains(meta.file_id)) {
         return false; // Already exists
     }
 
     auto session = std::make_shared<FileReceiverSession>(meta, download_dir_);
     receivers_[meta.file_id] = session;
-
-    if (meta.total_chunks == 0) {
-        // 0-byte file
-        session->finalize();
-        if (on_received_cb_) {
-            on_received_cb_(session->meta(), session->target_path());
-        }
-    }
     return true;
 }
 
@@ -390,7 +391,7 @@ std::optional<FileAck> FileTransferManager::handle_file_block(
             bad_ack.file_id = block.file_id;
             bad_ack.chunk_index = block.chunk_index;
             bad_ack.ok = false;
-            bad_ack.error_msg = "Unknown file transfer session";
+            bad_ack.error_msg = "Unknown or expired file transfer session";
             return bad_ack;
         }
         session = it->second;
