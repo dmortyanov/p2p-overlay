@@ -103,3 +103,51 @@ TEST_CASE("OnionPacket: Tampered layer MAC tag fails decryption", "[unit][tunnel
     CHECK_FALSE(peel_fail.has_value());
 }
 
+TEST_CASE("OnionPacket: 1-hop circuit wrap and peel", "[unit][tunnel]") {
+    std::vector<TunnelHop> hops(1);
+    hops[0].node_id = NodeID::random();
+    hops[0].address = {"127.0.0.1", 9001};
+    hops[0].layer_key.fill(0x33);
+
+    NodeID destination = NodeID::random();
+    std::string test_msg = "Single hop message";
+    Bytes msg_bytes(test_msg.begin(), test_msg.end());
+
+    uint64_t seq = 1;
+    Bytes onion = OnionPacket::wrap(msg_bytes, hops, destination, seq);
+    REQUIRE(onion.size() > msg_bytes.size());
+
+    auto peel = OnionPacket::peel(onion, hops[0].layer_key, seq);
+    REQUIRE(peel.has_value());
+    CHECK(peel->is_terminal);
+    CHECK(peel->next_hop_node_id == destination);
+    CHECK(std::string(peel->payload.begin(), peel->payload.end()) == test_msg);
+}
+
+TEST_CASE("OnionPacket: Sequence number mismatch fails decryption", "[unit][tunnel]") {
+    std::vector<TunnelHop> hops(1);
+    hops[0].node_id = NodeID::random();
+    hops[0].address = {"127.0.0.1", 9002};
+    hops[0].layer_key.fill(0x77);
+
+    NodeID destination = NodeID::random();
+    Bytes msg = {0x01, 0x02, 0x03};
+
+    uint64_t encrypt_seq = 10;
+    uint64_t wrong_seq = 11; // Mismatched sequence number
+    Bytes onion = OnionPacket::wrap(msg, hops, destination, encrypt_seq);
+
+    auto peel = OnionPacket::peel(onion, hops[0].layer_key, wrong_seq);
+    CHECK_FALSE(peel.has_value());
+}
+
+TEST_CASE("OnionPacket: Peeling corrupted short buffer fails safely", "[unit][tunnel]") {
+    std::array<uint8_t, 32> key{};
+    key.fill(0x55);
+
+    Bytes short_buffer = {0x01, 0x02};
+    auto peel = OnionPacket::peel(short_buffer, key, 1);
+    CHECK_FALSE(peel.has_value());
+}
+
+

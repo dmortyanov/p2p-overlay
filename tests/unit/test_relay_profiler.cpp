@@ -97,3 +97,17 @@ TEST_CASE("RelayProfiler: Hop selection with exclusion and scoring", "[unit][tun
     }
 }
 
+TEST_CASE("RelayProfiler: Unregistered node returns nullopt profile", "[unit][tunnel]") {
+    RelayProfiler profiler;
+    NodeID unknown = NodeID::random();
+    CHECK_FALSE(profiler.get_profile(unknown).has_value());
+}
+
+TEST_CASE("RelayProfiler: Empty candidates list returns empty selection", "[unit][tunnel]") {
+    RelayProfiler profiler;
+    std::vector<PeerInfo> empty_candidates;
+    auto selected = profiler.select_hops(empty_candidates, 3, {});
+    CHECK(selected.empty());
+}
+
+

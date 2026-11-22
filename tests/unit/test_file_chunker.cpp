@@ -110,3 +110,101 @@ TEST_CASE("Stage 6: FileSenderSession sliding window advancement and ACK handlin
     std::filesystem::remove_all(test_dir);
 }
 
+TEST_CASE("Stage 6: FileChunker handles single-byte file", "[app][unit]") {
+    std::filesystem::path test_dir = "./test_single_byte_dir";
+    std::filesystem::remove_all(test_dir);
+
+    auto single_path = test_dir / "one_byte.bin";
+    create_dummy_file(single_path, 1, 0xEF);
+
+    auto sender_id = NodeID::random();
+    auto chunker = FileChunker::from_file(single_path, sender_id, 48 * 1024);
+    REQUIRE(chunker.has_value());
+    CHECK(chunker->meta().file_size == 1);
+    CHECK(chunker->meta().total_chunks == 1);
+    CHECK(chunker->chunks().size() == 1);
+    CHECK(chunker->chunks()[0].data.size() == 1);
+    CHECK(chunker->chunks()[0].data[0] == 0xEF);
+
+    std::filesystem::remove_all(test_dir);
+}
+
+TEST_CASE("Stage 6: FileChunker handles exact chunk size boundary (48 KiB)", "[app][unit]") {
+    std::filesystem::path test_dir = "./test_boundary_dir";
+    std::filesystem::remove_all(test_dir);
+
+    auto boundary_path = test_dir / "exact_48k.bin";
+    create_dummy_file(boundary_path, 48 * 1024, 0x33);
+
+    auto sender_id = NodeID::random();
+    auto chunker = FileChunker::from_file(boundary_path, sender_id, 48 * 1024);
+    REQUIRE(chunker.has_value());
+    CHECK(chunker->meta().file_size == 48 * 1024);
+    CHECK(chunker->meta().total_chunks == 1);
+    CHECK(chunker->chunks().size() == 1);
+    CHECK(chunker->chunks()[0].data.size() == 48 * 1024);
+
+    std::filesystem::remove_all(test_dir);
+}
+
+TEST_CASE("Stage 6: FileSenderSession duplicate ACK ignored gracefully", "[app][unit]") {
+    std::filesystem::path test_dir = "./test_dup_ack_dir";
+    std::filesystem::remove_all(test_dir);
+
+    auto path = test_dir / "dup.bin";
+    create_dummy_file(path, 48 * 1024 * 2, 0x55);
+
+    auto chunker = FileChunker::from_file(path, NodeID::random(), 48 * 1024);
+    REQUIRE(chunker.has_value());
+
+    FileSenderSession session(std::move(*chunker), NodeID::random(), 2);
+    std::vector<uint32_t> sent;
+    auto sender_fn = [&](const FileBlock& b) { sent.push_back(b.chunk_index); };
+
+    session.advance_window(sender_fn);
+    CHECK(sent.size() == 2);
+
+    FileAck ack0;
+    ack0.file_id = session.meta().file_id;
+    ack0.chunk_index = 0;
+    ack0.ok = true;
+
+    session.handle_ack(ack0, sender_fn);
+    auto count_after_first = sent.size();
+
+    // Send duplicate ACK for chunk 0
+    session.handle_ack(ack0, sender_fn);
+    CHECK(sent.size() == count_after_first); // No duplicate blocks emitted
+
+    std::filesystem::remove_all(test_dir);
+}
+
+TEST_CASE("Stage 6: FileSenderSession rejects ACK with mismatched file_id", "[app][unit]") {
+    std::filesystem::path test_dir = "./test_wrong_id_dir";
+    std::filesystem::remove_all(test_dir);
+
+    auto path = test_dir / "wrong.bin";
+    create_dummy_file(path, 1024, 0x77);
+
+    auto chunker = FileChunker::from_file(path, NodeID::random(), 48 * 1024);
+    REQUIRE(chunker.has_value());
+
+    FileSenderSession session(std::move(*chunker), NodeID::random(), 1);
+    std::vector<uint32_t> sent;
+    auto sender_fn = [&](const FileBlock& b) { sent.push_back(b.chunk_index); };
+
+    session.advance_window(sender_fn);
+    CHECK(sent.size() == 1);
+
+    FileAck foreign_ack;
+    foreign_ack.file_id = RequestID::generate(); // Different file_id
+    foreign_ack.chunk_index = 0;
+    foreign_ack.ok = true;
+
+    session.handle_ack(foreign_ack, sender_fn);
+    CHECK_FALSE(session.is_complete()); // Must not complete on foreign ACK
+
+    std::filesystem::remove_all(test_dir);
+}
+
+

@@ -141,3 +141,61 @@ TEST_CASE("Stage 6: Path Traversal Protection and Filename Sanitization", "[app]
     CHECK(sanitize_filename("safe_file.txt") == "safe_file.txt");
 }
 
+TEST_CASE("Stage 6: AppMessage handles empty text and whitespace payload", "[app][unit]") {
+    AppMessage original;
+    original.msg_id = RequestID::generate();
+    original.sender_id = NodeID::random();
+    original.recipient_id = NodeID::random();
+    original.timestamp = 1791800100;
+    original.text = ""; // Empty string
+    original.is_e2e_encrypted = false;
+
+    auto bytes = serialize_app_message(original);
+    REQUIRE_FALSE(bytes.empty());
+
+    AppMessage restored;
+    REQUIRE(deserialize_app_message(bytes, restored));
+    CHECK(restored.text.empty());
+    CHECK(restored.msg_id == original.msg_id);
+}
+
+TEST_CASE("Stage 6: AppMessage handles UTF-8 / Cyrillic payload", "[app][unit]") {
+    AppMessage original;
+    original.msg_id = RequestID::generate();
+    original.sender_id = NodeID::random();
+    original.recipient_id = NodeID::random();
+    original.timestamp = 1791800200;
+    original.text = "Привет, P2P оверлей! Тест русской кодировки UTF-8 и эмодзи 🔒🚀";
+    original.is_e2e_encrypted = true;
+
+    auto bytes = serialize_app_message(original);
+    REQUIRE_FALSE(bytes.empty());
+
+    AppMessage restored;
+    REQUIRE(deserialize_app_message(bytes, restored));
+    CHECK(restored.text == original.text);
+    CHECK(restored.is_e2e_encrypted == true);
+}
+
+TEST_CASE("Stage 6: AppMessage rejects corrupt CBOR buffer", "[app][unit]") {
+    Bytes corrupt_bytes = {0x00, 0xFF, 0xFE, 0x12, 0x34};
+    AppMessage restored;
+    CHECK_FALSE(deserialize_app_message(corrupt_bytes, restored));
+}
+
+TEST_CASE("Stage 6: AppAck rejects truncated CBOR payload", "[app][unit]") {
+    AppAck ack;
+    ack.msg_id = RequestID::generate();
+    ack.sender_id = NodeID::random();
+    ack.ok = true;
+    ack.error_msg = "test error";
+
+    auto full_bytes = serialize_app_ack(ack);
+    REQUIRE(full_bytes.size() > 4);
+
+    Bytes truncated_bytes(full_bytes.begin(), full_bytes.begin() + 4);
+    AppAck restored;
+    CHECK_FALSE(deserialize_app_ack(truncated_bytes, restored));
+}
+
+
