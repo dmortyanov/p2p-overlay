@@ -21,6 +21,8 @@ std::string record_validation_error_name(RecordValidationError err) {
         case RecordValidationError::EmptyAddresses:    return "EmptyAddresses";
         case RecordValidationError::InvalidAddress:    return "InvalidAddress";
         case RecordValidationError::RollbackDetected:  return "RollbackDetected";
+        case RecordValidationError::KeyMismatch:       return "KeyMismatch";
+        case RecordValidationError::AliasConflict:     return "AliasConflict";
     }
     return "Unknown";
 }

@@ -175,6 +175,12 @@ private:
     /// Schedule periodic republishing of self-record (E3-7).
     void schedule_republish();
 
+    /// Return reachable advertised host (never 0.0.0.0) (E2-5).
+    [[nodiscard]] std::string advertised_host() const;
+
+    /// Construct a frame with protocol_version from config (E1-2).
+    [[nodiscard]] transport::Frame make_frame(transport::MessageType type, const RequestID& rid) const;
+
     config::Config                     config_;
     asio::io_context                   io_;
     std::unique_ptr<identity::Keypair> keypair_;
@@ -187,6 +193,7 @@ private:
 
     uint64_t                           record_seq_ = 0;
     std::string                        node_alias_;
+    bool                               has_published_self_ = false;
     std::shared_ptr<asio::steady_timer> purge_timer_;
     std::shared_ptr<asio::steady_timer> republish_timer_;
 

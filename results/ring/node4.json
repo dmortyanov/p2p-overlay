@@ -1,6 +1,41 @@
 {
-  "active_buckets": [],
+  "active_buckets": [
+    {
+      "bucket_index": 254,
+      "contacts": [
+        {
+          "host": "127.0.0.1",
+          "node_id": "c3e0242ffbaacc54bb84863f1ccfd05a85da0e985e7cce3000f34096f1ae7d95",
+          "port": 24202
+        }
+      ],
+      "replacements": 0,
+      "size": 1
+    },
+    {
+      "bucket_index": 255,
+      "contacts": [
+        {
+          "host": "127.0.0.1",
+          "node_id": "677f96cbb2f82f5cde3c0d74f2bf312dd6d0a31e3aab928020a18c4b40be7a40",
+          "port": 24203
+        },
+        {
+          "host": "127.0.0.1",
+          "node_id": "079699d2b9979d4c4f1a1064c55f6525e3f4c0774a1b5b42a530208497c3537b",
+          "port": 24201
+        },
+        {
+          "host": "127.0.0.1",
+          "node_id": "5f3a5ec3376ed97deb17ef3cefa91b7d4b55e428b432e1c3374085a425b2709c",
+          "port": 24200
+        }
+      ],
+      "replacements": 0,
+      "size": 3
+    }
+  ],
   "k": 4,
-  "local_id": "ed71a0fc472a24e216eb9c5f56e0f0932780d2449a4a24f7a96d97f41d896d9e",
-  "total_contacts": 0
+  "local_id": "a95c37cd715f7e0636a88e44b219eab3ca26ce0eacde7b890e880edb6038b9f3",
+  "total_contacts": 4
 }

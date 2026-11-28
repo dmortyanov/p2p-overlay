@@ -117,10 +117,15 @@ TEST_CASE("Multiple frames in single buffer", "[frame]") {
     constexpr int NUM_FRAMES = 5;
     Bytes combined;
 
+    constexpr MessageType valid_types[] = {
+        MessageType::PING, MessageType::PONG,
+        MessageType::FIND_NODE_REQUEST, MessageType::FIND_NODE_RESPONSE,
+        MessageType::STORE_REQUEST
+    };
     std::vector<Frame> originals;
     for (int i = 0; i < NUM_FRAMES; ++i) {
         Frame f;
-        f.type = static_cast<MessageType>(0x01 + i);
+        f.type = valid_types[i % 5];
         f.request_id = RequestID::generate();
         f.payload = {static_cast<uint8_t>(i), static_cast<uint8_t>(i + 1)};
         originals.push_back(f);
@@ -277,9 +282,22 @@ TEST_CASE("100 frames of variable length with randomized stream chunking (E1-5)"
     std::vector<Frame> originals;
     Bytes combined_stream;
 
+    constexpr MessageType valid_types[] = {
+        MessageType::PING, MessageType::PONG,
+        MessageType::FIND_NODE_REQUEST, MessageType::FIND_NODE_RESPONSE,
+        MessageType::STORE_REQUEST, MessageType::STORE_RESPONSE,
+        MessageType::FIND_VALUE_REQUEST, MessageType::FIND_VALUE_RESPONSE,
+        MessageType::TUNNEL_BUILD, MessageType::TUNNEL_BUILD_OK,
+        MessageType::TUNNEL_DATA, MessageType::TUNNEL_ACK,
+        MessageType::APP_MESSAGE, MessageType::APP_ACK,
+        MessageType::APP_FILE_META, MessageType::APP_FILE_BLOCK,
+        MessageType::HANDSHAKE_INIT, MessageType::HANDSHAKE_RESPONSE,
+        MessageType::HANDSHAKE_COMPLETE, MessageType::ERROR
+    };
+
     for (int i = 0; i < 120; ++i) {
         Frame f;
-        f.type = static_cast<MessageType>(0x01 + (i % 20));
+        f.type = valid_types[i % (sizeof(valid_types) / sizeof(valid_types[0]))];
         f.request_id = RequestID::generate();
 
         int payload_size = size_dist(rng);

@@ -56,6 +56,9 @@ io_timeout_ms = 10000
 # Keepalive / PING interval (ms)
 keepalive_interval_ms = 30000
 
+# Maximum queued outgoing frames per connection (E1-7)
+max_write_queue_size = 1024
+
 [tunnel]
 # Minimum relay hops (advanced: 3, simplified: 2)
 min_relay_hops = 3

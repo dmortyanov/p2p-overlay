@@ -180,3 +180,77 @@ TEST_CASE("E1-6: Unsolicited PONG with random request_id is discarded", "[negati
     if (t.joinable()) t.join();
     clean_test_dir("./test_neg_pong");
 }
+
+TEST_CASE("E1-7: Unknown MessageType is rejected with FrameError::InvalidType", "[negative][transport]") {
+    FrameParser parser(1, 65536);
+
+    Bytes bad_frame(FRAME_HEADER_SIZE, 0);
+    bad_frame[0] = 1;    // version 1
+    bad_frame[1] = 0x99; // invalid / undefined MessageType
+
+    parser.feed(bad_frame);
+    auto res = parser.next_frame();
+    REQUIRE_FALSE(res.has_value());
+    CHECK(res.error() == FrameError::InvalidType);
+}
+
+TEST_CASE("E1-7: Write queue limit drops excess frames under overload", "[negative][transport]") {
+    clean_test_dir("./test_neg_queue");
+    auto cfg = make_test_cfg(22005, "./test_neg_queue");
+    Node server(cfg);
+    server.start();
+    std::thread t([&]() { server.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    asio::io_context client_io;
+    auto conn = TcpConnection::connect(client_io, "127.0.0.1", 22005);
+    REQUIRE(conn != nullptr);
+    conn->configure(1, 65536, std::chrono::milliseconds(5000), 3); // small queue limit = 3
+
+    // Before client_io.run(), async_write callbacks don't drain the queue, so queue fills up
+    Frame f = Frame::make_ping(RequestID::generate());
+    CHECK(conn->send(f)); // 1st queued (and starts async_write)
+    CHECK(conn->send(f)); // 2nd queued
+    CHECK(conn->send(f)); // 3rd queued
+    CHECK_FALSE(conn->send(f)); // 4th exceeds limit 3 -> rejected!
+
+    conn->close();
+    server.stop();
+    if (t.joinable()) t.join();
+    clean_test_dir("./test_neg_queue");
+}
+
+TEST_CASE("E1-3: TcpConnection::async_connect connects and handles unreachable host", "[transport][async]") {
+    clean_test_dir("./test_async_conn");
+    auto cfg = make_test_cfg(22006, "./test_async_conn");
+    Node server(cfg);
+    server.start();
+    std::thread t([&]() { server.run(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    asio::io_context client_io;
+    bool got_ok = false;
+    bool got_fail = false;
+
+    TcpConnection::async_connect(
+        client_io, "127.0.0.1", 22006, std::chrono::milliseconds(2000),
+        [&](TcpConnection::Ptr c) {
+            got_ok = (c != nullptr && c->is_open());
+            if (c) c->close();
+        });
+
+    TcpConnection::async_connect(
+        client_io, "127.0.0.1", 22999, std::chrono::milliseconds(500),
+        [&](TcpConnection::Ptr c) {
+            got_fail = (c == nullptr);
+        });
+
+    client_io.run();
+    CHECK(got_ok);
+    CHECK(got_fail);
+
+    server.stop();
+    if (t.joinable()) t.join();
+    clean_test_dir("./test_async_conn");
+}
+

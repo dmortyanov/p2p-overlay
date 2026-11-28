@@ -88,6 +88,7 @@ int main(int argc, char* argv[]) {
     // ─── Parse command-line arguments ────────────────────────────
     std::string config_path    = "config/default.toml";
     std::string listen_address;
+    std::string advertise_address;
     uint16_t    listen_port    = 0;
     std::string data_dir;
     std::string bootstrap_str;
@@ -103,6 +104,8 @@ int main(int argc, char* argv[]) {
             listen_port = static_cast<uint16_t>(std::stoi(argv[++i]));
         } else if ((arg == "--address" || arg == "-a") && i + 1 < argc) {
             listen_address = argv[++i];
+        } else if (arg == "--advertise" && i + 1 < argc) {
+            advertise_address = argv[++i];
         } else if ((arg == "--data-dir" || arg == "-d") && i + 1 < argc) {
             data_dir = argv[++i];
         } else if ((arg == "--bootstrap" || arg == "-b") && i + 1 < argc) {
@@ -144,6 +147,10 @@ int main(int argc, char* argv[]) {
 
     auto config = p2p::config::load_config(
         config_path, listen_address, listen_port, data_dir, bootstrap_peers);
+
+    if (!advertise_address.empty()) {
+        config.node.advertise_address = advertise_address;
+    }
 
     // Apply log level from config if not overridden
     if (log_level == "info" && !config.logging.level.empty()) {

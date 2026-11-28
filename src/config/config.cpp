@@ -23,10 +23,11 @@ Config load_config(const std::filesystem::path& path) {
 
         // ─── Node ────────────────────────────────────────────
         if (auto node = tbl["node"]) {
-            cfg.node.listen_address = node["listen_address"].value_or(cfg.node.listen_address);
-            cfg.node.listen_port    = static_cast<uint16_t>(
+            cfg.node.listen_address    = node["listen_address"].value_or(cfg.node.listen_address);
+            cfg.node.advertise_address = node["advertise_address"].value_or(cfg.node.advertise_address);
+            cfg.node.listen_port       = static_cast<uint16_t>(
                 node["listen_port"].value_or(static_cast<int64_t>(cfg.node.listen_port)));
-            cfg.node.data_dir       = node["data_dir"].value_or(cfg.node.data_dir);
+            cfg.node.data_dir          = node["data_dir"].value_or(cfg.node.data_dir);
         }
 
         // ─── Identity ───────────────────────────────────────
@@ -48,11 +49,12 @@ Config load_config(const std::filesystem::path& path) {
 
         // ─── Transport ───────────────────────────────────────
         if (auto tr = tbl["transport"]) {
-            cfg.transport.protocol_version     = static_cast<int>(tr["protocol_version"].value_or(static_cast<int64_t>(cfg.transport.protocol_version)));
-            cfg.transport.max_frame_payload    = static_cast<uint32_t>(tr["max_frame_payload"].value_or(static_cast<int64_t>(cfg.transport.max_frame_payload)));
-            cfg.transport.connect_timeout_ms   = static_cast<int>(tr["connect_timeout_ms"].value_or(static_cast<int64_t>(cfg.transport.connect_timeout_ms)));
-            cfg.transport.io_timeout_ms        = static_cast<int>(tr["io_timeout_ms"].value_or(static_cast<int64_t>(cfg.transport.io_timeout_ms)));
+            cfg.transport.protocol_version      = static_cast<int>(tr["protocol_version"].value_or(static_cast<int64_t>(cfg.transport.protocol_version)));
+            cfg.transport.max_frame_payload     = static_cast<uint32_t>(tr["max_frame_payload"].value_or(static_cast<int64_t>(cfg.transport.max_frame_payload)));
+            cfg.transport.connect_timeout_ms    = static_cast<int>(tr["connect_timeout_ms"].value_or(static_cast<int64_t>(cfg.transport.connect_timeout_ms)));
+            cfg.transport.io_timeout_ms         = static_cast<int>(tr["io_timeout_ms"].value_or(static_cast<int64_t>(cfg.transport.io_timeout_ms)));
             cfg.transport.keepalive_interval_ms = static_cast<int>(tr["keepalive_interval_ms"].value_or(static_cast<int64_t>(cfg.transport.keepalive_interval_ms)));
+            cfg.transport.max_write_queue_size  = static_cast<std::size_t>(tr["max_write_queue_size"].value_or(static_cast<int64_t>(cfg.transport.max_write_queue_size)));
         }
 
         // ─── Tunnel ──────────────────────────────────────────

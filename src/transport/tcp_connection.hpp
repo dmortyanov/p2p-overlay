@@ -58,6 +58,13 @@ public:
                        uint16_t port,
                        std::chrono::milliseconds timeout = std::chrono::milliseconds(5000));
 
+    /// Connect asynchronously to a remote peer (E1-3).
+    static void async_connect(asio::io_context& io,
+                              const std::string& host,
+                              uint16_t port,
+                              std::chrono::milliseconds timeout,
+                              std::function<void(Ptr)> on_complete);
+
     ~TcpConnection();
 
     // Non-copyable, non-movable (shared_ptr managed)
@@ -67,8 +74,11 @@ public:
     /// Start async read loop. Must be called after creation.
     void start_reading();
 
-    /// Send a frame asynchronously.
-    void send(const Frame& frame);
+    /// Send a frame asynchronously. Returns false if closed, oversized, or write queue is full (E1-7).
+    bool send(const Frame& frame);
+
+    /// Current number of queued outgoing frames.
+    [[nodiscard]] std::size_t write_queue_size() const { return write_queue_.size(); }
 
     /// Close the connection gracefully.
     void close(const std::string& reason = "closed");
@@ -97,8 +107,11 @@ public:
     /// Check if the connection is open.
     [[nodiscard]] bool is_open() const { return socket_.is_open(); }
 
-    /// Configure protocol version, max payload, and I/O timeout (E1-2, E1-3).
-    void configure(uint8_t version, uint32_t max_payload, std::chrono::milliseconds io_timeout);
+    /// Configure protocol version, max payload, I/O timeout, and write queue limit (E1-2, E1-3, E1-7).
+    void configure(uint8_t version,
+                   uint32_t max_payload,
+                   std::chrono::milliseconds io_timeout,
+                   std::size_t max_write_queue = 1024);
 
     /// Reset I/O watchdog timer.
     void reset_io_timer();
@@ -135,6 +148,7 @@ private:
     // Write queue
     std::queue<Bytes> write_queue_;
     bool              writing_ = false;
+    std::size_t       max_write_queue_size_{1024};
 
     // Inactivity watchdog timer (E1-3)
     asio::steady_timer        io_timer_;

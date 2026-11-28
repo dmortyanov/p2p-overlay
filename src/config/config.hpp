@@ -14,9 +14,10 @@ namespace p2p::config {
 struct Config {
     // ─── Node ────────────────────────────────────────────────
     struct {
-        std::string listen_address = "0.0.0.0";
-        uint16_t    listen_port    = 9000;
-        std::string data_dir       = "./node_state";
+        std::string listen_address    = "0.0.0.0";
+        std::string advertise_address = "";
+        uint16_t    listen_port       = 9000;
+        std::string data_dir          = "./node_state";
     } node;
 
     // ─── Identity ────────────────────────────────────────────
@@ -38,11 +39,12 @@ struct Config {
 
     // ─── Transport ───────────────────────────────────────────
     struct {
-        int      protocol_version     = 1;
-        uint32_t max_frame_payload    = 65536;
-        int      connect_timeout_ms   = 5000;
-        int      io_timeout_ms        = 10000;
-        int      keepalive_interval_ms = 30000;
+        int         protocol_version     = 1;
+        uint32_t    max_frame_payload    = 65536;
+        int         connect_timeout_ms   = 5000;
+        int         io_timeout_ms        = 10000;
+        int         keepalive_interval_ms = 30000;
+        std::size_t max_write_queue_size = 1024;
     } transport;
 
     // ─── Tunnel ──────────────────────────────────────────────

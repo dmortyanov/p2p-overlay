@@ -19,12 +19,16 @@ public:
 
     /// Attempt to store a record under the given DHT key.
     /// Enforces:
+    ///   - Maximum serialized record size (E3-2)
+    ///   - Key-to-record binding: key must match node_record_key(node_id) or alias_record_key(alias) (E3-2)
+    ///   - Owner-bound alias conflict resolution: active alias cannot be overwritten by another NodeID (E3-8)
     ///   - Cryptographic signature & format validation (E3-2)
     ///   - Monotonic sequence_number / anti-rollback (E3-6)
     ///   - Non-expired TTL window
     [[nodiscard]] RecordValidationError put(const NodeID& key,
                                            const NodeRecord& record,
-                                           uint64_t current_time_sec);
+                                           uint64_t current_time_sec,
+                                           std::size_t max_record_size = 4096);
 
     /// Retrieve record by DHT key.
     /// Returns nullopt if not found or if the entry has expired.
@@ -53,8 +57,8 @@ private:
     mutable std::mutex mutex_;
     // Primary key -> record
     std::unordered_map<NodeID, NodeRecord> records_;
-    // Key -> highest sequence_number seen
-    std::unordered_map<NodeID, uint64_t> highest_seq_;
+    // Key -> (owner NodeID, highest sequence_number seen for that owner)
+    std::unordered_map<NodeID, std::pair<NodeID, uint64_t>> highest_seq_;
 };
 
 } // namespace p2p::dht

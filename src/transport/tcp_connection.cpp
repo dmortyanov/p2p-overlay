@@ -35,10 +35,14 @@ TcpConnection::~TcpConnection() {
 
 // ─── Configuration & Watchdog ────────────────────────────────────────
 
-void TcpConnection::configure(uint8_t version, uint32_t max_payload, std::chrono::milliseconds io_timeout) {
+void TcpConnection::configure(uint8_t version,
+                              uint32_t max_payload,
+                              std::chrono::milliseconds io_timeout,
+                              std::size_t max_write_queue) {
     parser_.set_expected_version(version);
     parser_.set_max_payload(max_payload);
     io_timeout_ = io_timeout;
+    max_write_queue_size_ = max_write_queue > 0 ? max_write_queue : 1024;
     reset_io_timer();
 }
 
@@ -135,6 +139,67 @@ TcpConnection::Ptr TcpConnection::connect(
 
     spdlog::debug("Connected to {}:{}", host, port);
     return Ptr(new TcpConnection(std::move(socket)));
+}
+
+void TcpConnection::async_connect(
+    asio::io_context& io,
+    const std::string& host,
+    uint16_t port,
+    std::chrono::milliseconds timeout,
+    std::function<void(Ptr)> on_complete)
+{
+    auto resolver = std::make_shared<asio::ip::tcp::resolver>(io);
+    auto socket = std::make_shared<asio::ip::tcp::socket>(io);
+    auto timer = std::make_shared<asio::steady_timer>(io, timeout);
+    auto finished = std::make_shared<bool>(false);
+
+    timer->async_wait([socket, finished, host, port, on_complete](const asio::error_code& ec) {
+        if (!ec && !*finished) {
+            *finished = true;
+            asio::error_code close_ec;
+            socket->close(close_ec);
+            spdlog::error("Async connect to {}:{} timed out", host, port);
+            if (on_complete) on_complete(nullptr);
+        }
+    });
+
+    resolver->async_resolve(
+        host, std::to_string(port),
+        [resolver, socket, timer, finished, host, port, on_complete](
+            const asio::error_code& ec,
+            asio::ip::tcp::resolver::results_type results)
+        {
+            if (*finished) return;
+            if (ec) {
+                *finished = true;
+                timer->cancel();
+                spdlog::error("Async resolve failed for {}:{} — {}", host, port, ec.message());
+                if (on_complete) on_complete(nullptr);
+                return;
+            }
+
+            asio::async_connect(
+                *socket, results,
+                [socket, timer, finished, host, port, on_complete](
+                    const asio::error_code& conn_ec,
+                    const asio::ip::tcp::endpoint&)
+                {
+                    if (*finished) return;
+                    *finished = true;
+                    timer->cancel();
+
+                    if (conn_ec) {
+                        spdlog::error("Async connect failed to {}:{} — {}", host, port, conn_ec.message());
+                        if (on_complete) on_complete(nullptr);
+                        return;
+                    }
+
+                    asio::error_code opt_ec;
+                    socket->set_option(asio::ip::tcp::no_delay(true), opt_ec);
+                    spdlog::debug("Async connected to {}:{}", host, port);
+                    if (on_complete) on_complete(Ptr(new TcpConnection(std::move(*socket))));
+                });
+        });
 }
 
 // ─── Remote endpoint ────────────────────────────────────────────────
@@ -252,7 +317,9 @@ void TcpConnection::process_incoming() {
             spdlog::warn("Frame error from {}: {}",
                          remote_endpoint_str(),
                          frame_error_name(err));
-            if (err == FrameError::UnsupportedVersion || err == FrameError::PayloadTooLarge) {
+            if (err == FrameError::UnsupportedVersion ||
+                err == FrameError::PayloadTooLarge ||
+                err == FrameError::InvalidType) {
                 close(std::string("Protocol error: ") + std::string(frame_error_name(err)));
                 break;
             }
@@ -262,10 +329,22 @@ void TcpConnection::process_incoming() {
 
 // ─── Write ──────────────────────────────────────────────────────────
 
-void TcpConnection::send(const Frame& frame) {
+bool TcpConnection::send(const Frame& frame) {
     if (!socket_.is_open()) {
         spdlog::warn("Attempted to send on closed connection");
-        return;
+        return false;
+    }
+
+    if (frame.payload.size() > parser_.max_payload()) {
+        spdlog::warn("Rejected outgoing frame {} exceeding max_payload ({} > {})",
+                     message_type_name(frame.type), frame.payload.size(), parser_.max_payload());
+        return false;
+    }
+
+    if (write_queue_.size() >= max_write_queue_size_) {
+        spdlog::warn("E1-7: Write queue limit ({}) reached for {}, dropping frame {}",
+                     max_write_queue_size_, remote_endpoint_str(), message_type_name(frame.type));
+        return false;
     }
 
     reset_io_timer();
@@ -278,7 +357,7 @@ void TcpConnection::send(const Frame& frame) {
             to_send.type != MessageType::HANDSHAKE_COMPLETE) {
             if (!secure_session_->encrypt_frame(to_send)) {
                 spdlog::warn("Failed to encrypt frame for peer {}", remote_endpoint_str());
-                return;
+                return false;
             }
         }
     }
@@ -295,6 +374,7 @@ void TcpConnection::send(const Frame& frame) {
     if (!was_writing) {
         do_write();
     }
+    return true;
 }
 
 void TcpConnection::do_write() {

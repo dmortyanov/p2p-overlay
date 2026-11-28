@@ -4,8 +4,21 @@ namespace p2p::dht {
 
 RecordValidationError RecordStore::put(const NodeID& key,
                                        const NodeRecord& record,
-                                       uint64_t current_time_sec) {
-    // 1. Full cryptographic, format, and time validation
+                                       uint64_t current_time_sec,
+                                       std::size_t max_record_size) {
+    // 1. Check serialized record size against config max_record_size (E3-2)
+    if (max_record_size > 0 && record.to_cbor().size() > max_record_size) {
+        return RecordValidationError::InvalidSize;
+    }
+
+    // 2. Key-to-record binding (E3-2): prevent storing record under an arbitrary/victim key
+    bool matches_node_key = (key == node_record_key(record.node_id));
+    bool matches_alias_key = (!record.alias.empty() && key == alias_record_key(record.alias));
+    if (!matches_node_key && !matches_alias_key) {
+        return RecordValidationError::KeyMismatch;
+    }
+
+    // 3. Full cryptographic, format, and time validation
     auto err = record.validate(current_time_sec);
     if (err != RecordValidationError::None) {
         return err;
@@ -13,26 +26,34 @@ RecordValidationError RecordStore::put(const NodeID& key,
 
     std::lock_guard lock(mutex_);
 
-    // 2. Anti-rollback check (E3-6)
-    // Check if we've seen a higher or equal sequence number for this key
-    auto seq_it = highest_seq_.find(key);
-    if (seq_it != highest_seq_.end()) {
-        if (record.sequence_number <= seq_it->second) {
-            return RecordValidationError::RollbackDetected;
-        }
-    }
-
-    // 3. Check existing record under this exact key
+    // 4. Owner-bound conflict check (E3-8): active record cannot be hijacked by another NodeID
     auto it = records_.find(key);
     if (it != records_.end()) {
-        if (record.sequence_number <= it->second.sequence_number) {
+        if (it->second.is_time_valid(current_time_sec)) {
+            if (it->second.node_id != record.node_id ||
+                it->second.identity_public_key != record.identity_public_key) {
+                return RecordValidationError::AliasConflict;
+            }
+            if (record.sequence_number <= it->second.sequence_number) {
+                return RecordValidationError::RollbackDetected;
+            }
+        } else {
+            // Existing record expired — purge it so a new owner can claim if needed
+            records_.erase(it);
+        }
+    }
+
+    // 5. Anti-rollback check for the same owner (E3-6)
+    auto seq_it = highest_seq_.find(key);
+    if (seq_it != highest_seq_.end() && seq_it->second.first == record.node_id) {
+        if (record.sequence_number <= seq_it->second.second) {
             return RecordValidationError::RollbackDetected;
         }
     }
 
-    // 4. Update storage and sequence tracker
+    // 6. Update storage and sequence tracker
     records_[key] = record;
-    highest_seq_[key] = record.sequence_number;
+    highest_seq_[key] = {record.node_id, record.sequence_number};
 
     return RecordValidationError::None;
 }

@@ -107,4 +107,38 @@ inline constexpr bool operator&(FrameFlags a, FrameFlags b) {
     }
 }
 
+/// Check if a raw byte corresponds to a defined protocol MessageType (E1-7).
+[[nodiscard]] constexpr bool is_valid_message_type(MessageType t) {
+    switch (t) {
+        case MessageType::PING:
+        case MessageType::PONG:
+        case MessageType::FIND_NODE_REQUEST:
+        case MessageType::FIND_NODE_RESPONSE:
+        case MessageType::STORE_REQUEST:
+        case MessageType::STORE_RESPONSE:
+        case MessageType::FIND_VALUE_REQUEST:
+        case MessageType::FIND_VALUE_RESPONSE:
+        case MessageType::TUNNEL_BUILD:
+        case MessageType::TUNNEL_BUILD_OK:
+        case MessageType::TUNNEL_BUILD_FAIL:
+        case MessageType::TUNNEL_DATA:
+        case MessageType::TUNNEL_ACK:
+        case MessageType::TUNNEL_CLOSE:
+        case MessageType::TUNNEL_HEARTBEAT:
+        case MessageType::APP_MESSAGE:
+        case MessageType::APP_ACK:
+        case MessageType::APP_FILE_META:
+        case MessageType::APP_FILE_BLOCK:
+        case MessageType::APP_FILE_ACK:
+        case MessageType::APP_FILE_COMPLETE:
+        case MessageType::HANDSHAKE_INIT:
+        case MessageType::HANDSHAKE_RESPONSE:
+        case MessageType::HANDSHAKE_COMPLETE:
+        case MessageType::ERROR:
+            return true;
+        default:
+            return false;
+    }
+}
+
 } // namespace p2p::transport

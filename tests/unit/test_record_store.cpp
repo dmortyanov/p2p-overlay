@@ -132,3 +132,68 @@ TEST_CASE("E3-6 & E3-7: TTL expiration and purge", "[record_store][stage3][ttl]"
         REQUIRE(store.size() == 0);
     }
 }
+
+TEST_CASE("E3-2: Key-to-record binding and max_record_size enforcement", "[record_store][stage3][security]") {
+    REQUIRE(sodium_init() >= 0);
+
+    RecordStore store;
+    auto attacker = identity::Keypair::generate();
+    auto victim = identity::Keypair::generate();
+
+    uint64_t now = 1000;
+    auto rec = create_test_record(attacker, 1, now, now + 180, "attacker_alias");
+
+    SECTION("Storing under victim's node_record_key is rejected with KeyMismatch") {
+        auto victim_key = node_record_key(victim.node_id());
+        CHECK(store.put(victim_key, rec, now) == RecordValidationError::KeyMismatch);
+        CHECK(store.size() == 0);
+    }
+
+    SECTION("Storing under another alias key is rejected with KeyMismatch") {
+        auto other_alias_key = alias_record_key("victim_alias");
+        CHECK(store.put(other_alias_key, rec, now) == RecordValidationError::KeyMismatch);
+        CHECK(store.size() == 0);
+    }
+
+    SECTION("Record exceeding max_record_size is rejected with InvalidSize") {
+        auto own_key = node_record_key(attacker.node_id());
+        CHECK(store.put(own_key, rec, now, 32) == RecordValidationError::InvalidSize);
+        CHECK(store.size() == 0);
+    }
+}
+
+TEST_CASE("E3-8: Conflicting alias records and owner-bound resolution", "[record_store][stage3][alias]") {
+    REQUIRE(sodium_init() >= 0);
+
+    RecordStore store;
+    auto owner_a = identity::Keypair::generate();
+    auto attacker_b = identity::Keypair::generate();
+
+    uint64_t t0 = 1000;
+    auto alias_key = alias_record_key("alice");
+
+    // 1. Owner A claims "alice" with seq = 1, TTL = 60s
+    auto rec_a1 = create_test_record(owner_a, 1, t0, t0 + 60, "alice");
+    REQUIRE(store.put(alias_key, rec_a1, t0) == RecordValidationError::None);
+
+    // 2. Attacker B tries to hijack "alice" with a MUCH higher sequence_number = 999
+    auto rec_b = create_test_record(attacker_b, 999, t0 + 10, t0 + 120, "alice");
+    CHECK(store.put(alias_key, rec_b, t0 + 10) == RecordValidationError::AliasConflict);
+
+    // Verify "alice" still belongs to Owner A
+    auto resolved = store.get_by_alias("alice", t0 + 10);
+    REQUIRE(resolved.has_value());
+    CHECK(resolved->node_id == owner_a.node_id());
+
+    // 3. Owner A updates/republishes "alice" with seq = 2 -> accepted
+    auto rec_a2 = create_test_record(owner_a, 2, t0 + 20, t0 + 80, "alice");
+    CHECK(store.put(alias_key, rec_a2, t0 + 20) == RecordValidationError::None);
+
+    // 4. After Owner A's record expires (t0 + 100 > t0 + 80), another node can legitimately claim "alice"
+    auto rec_b_after = create_test_record(attacker_b, 1, t0 + 100, t0 + 200, "alice");
+    CHECK(store.put(alias_key, rec_b_after, t0 + 100) == RecordValidationError::None);
+    auto resolved_after = store.get_by_alias("alice", t0 + 105);
+    REQUIRE(resolved_after.has_value());
+    CHECK(resolved_after->node_id == attacker_b.node_id());
+}
+

@@ -116,6 +116,12 @@ std::expected<Frame, FrameError> FrameParser::next_frame() {
         return std::unexpected(FrameError::UnsupportedVersion);
     }
 
+    // Check message type (E1-7)
+    if (!is_valid_message_type(msg_type)) {
+        buffer_.erase(buffer_.begin(), buffer_.begin() + FRAME_HEADER_SIZE);
+        return std::unexpected(FrameError::InvalidType);
+    }
+
     // Check payload size BEFORE allocating (E1-2 configurable)
     if (payload_len > max_payload_) {
         buffer_.erase(buffer_.begin(), buffer_.begin() + FRAME_HEADER_SIZE);

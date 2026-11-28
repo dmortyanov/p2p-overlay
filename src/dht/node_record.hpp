@@ -27,6 +27,8 @@ enum class RecordValidationError {
     EmptyAddresses,       ///< addresses list is empty
     InvalidAddress,       ///< address host empty or port == 0
     RollbackDetected,     ///< sequence_number <= current_seq
+    KeyMismatch,          ///< DHT storage key does not match record node_id or alias (E3-2)
+    AliasConflict,        ///< Active alias/key owned by another NodeID (E3-8)
 };
 
 [[nodiscard]] std::string record_validation_error_name(RecordValidationError err);
